@@ -98,7 +98,7 @@ void TradeReturnMonitor::on_match(const stStructMsg& msg) {
     if (!is_sz_market_str(market)) {
         return;
     }
-    if (msg.EntrustType != static_cast<uint8>(JYLB_BUY)) {
+    if (msg.EntrustType != static_cast<uint8>(JYLB_SALE)) {
         return;
     }
 
@@ -148,7 +148,7 @@ void TradeReturnMonitor::on_match(const stStructMsg& msg) {
             if (std::fabs(msg.OrderPrice - recorded.order_price) < 1e-6) {
                 recorded_copy = recorded;
                 has_recorded = true;
-                reason = "same_price_second_buy";
+                reason = "same_price_second_sale";
 
                 if (followup_sent_stocks_.find(stock_key) == followup_sent_stocks_.end()) {
                     followup_sent_stocks_.insert(stock_key);
@@ -178,24 +178,43 @@ void TradeReturnMonitor::on_match(const stStructMsg& msg) {
             return;
         }
 
-        // 对于 SZ 成交的第二笔买入：以第一笔的价格再发一笔 100 股限价委托
+        // 对于 SZ 成交的第二笔卖出：以第一笔的价格再发一笔 100 股限价买入委托
         int64_t nRet = SECITPDK_OrderEntrust(khh_.c_str(),
                                             "SZ",
                                             followup_stock_key.c_str(),
                                             JYLB_BUY,
                                             100,
                                             followup_price,
-                                            DDLX_XJWT,
+                                            0,
                                             sz_gdh_.c_str());
         if (nRet > 0) {
-            s_spLogger->info("[FOLLOWUP] order sent: stock={} price={} qty=100 ret_wth={}", followup_stock_key, followup_price, static_cast<long long>(nRet));
+            s_spLogger->info("[FOLLOWUP] limit order sent: stock={} price={} qty=100 ret_wth={}", followup_stock_key, followup_price, static_cast<long long>(nRet));
         } else {
             std::string err = SECITPDK_GetLastError();
-            s_spLogger->error("[FOLLOWUP] order failed: stock={} price={} qty=100 ret={} err={}",
+            s_spLogger->error("[FOLLOWUP] limit order failed: stock={} price={} qty=100 ret={} err={}",
                               followup_stock_key,
                               followup_price,
                               static_cast<long long>(nRet),
                               gbk_to_utf8(err).c_str());
+        }
+
+        // 再发送一笔本方最优价格委托
+        int64_t nRet2 = SECITPDK_OrderEntrust(khh_.c_str(),
+                                             "SZ",
+                                             followup_stock_key.c_str(),
+                                             JYLB_BUY,
+                                             100,
+                                             followup_price,  // 本方最优价格类型，价格参数传0
+                                             102,  // DDLX_SZSB_BFZYJ 本方最优价格
+                                             sz_gdh_.c_str());
+        if (nRet2 > 0) {
+            s_spLogger->info("[FOLLOWUP] best price order sent: stock={} qty=100 type=BFZYJ ret_wth={}", followup_stock_key, static_cast<long long>(nRet2));
+        } else {
+            std::string err2 = SECITPDK_GetLastError();
+            s_spLogger->error("[FOLLOWUP] best price order failed: stock={} qty=100 type=BFZYJ ret={} err={}",
+                              followup_stock_key,
+                              static_cast<long long>(nRet2),
+                              gbk_to_utf8(err2).c_str());
         }
         s_spLogger->flush();
     }
@@ -243,7 +262,7 @@ void TradeReturnMonitor::snapshot_0917() {
             if (!is_sz_market_str(market)) {
                 continue;
             }
-            if (drwt.EntrustType != JYLB_BUY) {
+            if (drwt.EntrustType != JYLB_SALE) {
                 continue;
             }
 
