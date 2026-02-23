@@ -109,12 +109,39 @@ bool StockDataManagerFactory::updateLimitupPrice(const std::string & sKhh)
     int32 count_updated = 0;
     for (auto& zqdmRecord : arZQDM)
     {
-        auto StockCode_key = std::string(zqdmRecord.StockCode) + ".SH";
-        auto it = m_stockManagerMap.find(StockCode_key);
+        std::string market = zqdmRecord.Market;
+        std::string stock_code = zqdmRecord.StockCode;
+        std::string stockCodeKey;
+
+        if (!market.empty())
+        {
+            stockCodeKey = stock_code + "." + market;
+        }
+
+        auto it = stockCodeKey.empty() ? m_stockManagerMap.end() : m_stockManagerMap.find(stockCodeKey);
+        if (it == m_stockManagerMap.end())
+        {
+            // 兼容异常返回值或历史数据：尝试常见后缀回退匹配
+            auto it_sh = m_stockManagerMap.find(stock_code + ".SH");
+            if (it_sh != m_stockManagerMap.end())
+            {
+                it = it_sh;
+                stockCodeKey = stock_code + ".SH";
+            }
+            else
+            {
+                auto it_sz = m_stockManagerMap.find(stock_code + ".SZ");
+                if (it_sz != m_stockManagerMap.end())
+                {
+                    it = it_sz;
+                    stockCodeKey = stock_code + ".SZ";
+                }
+            }
+        }
         if (it != m_stockManagerMap.end())
         {
-            std::cout<< zqdmRecord.StockCode << "HighLimitPrice:" << zqdmRecord.HighLimitPrice <<std::endl;
-            s_spLogger->info("通过查询的涨停价更新成功 {},原先价格 {},新价格 {}.", zqdmRecord.StockCode,it->second->m_limitUpPrice,zqdmRecord.HighLimitPrice);
+            std::cout<< stockCodeKey << " HighLimitPrice:" << zqdmRecord.HighLimitPrice <<std::endl;
+            s_spLogger->info("通过查询的涨停价更新成功 {},原先价格 {},新价格 {}.", stockCodeKey,it->second->m_limitUpPrice,zqdmRecord.HighLimitPrice);
             s_spLogger->flush();
             it->second->m_limitUpPrice = zqdmRecord.HighLimitPrice;
             count_updated++;
