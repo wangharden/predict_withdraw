@@ -20,6 +20,12 @@ static void* copyDataBody(const TDF_MSG* src) {
     if (itemCount <= 0 || itemSize <= 0) return nullptr;
 
     switch (src->nDataType) {
+    case MSG_DATA_MARKET: {
+        TDF_MARKET_DATA* pSrc = static_cast<TDF_MARKET_DATA*>(src->pData);
+        TDF_MARKET_DATA* pDst = new (std::nothrow) TDF_MARKET_DATA[itemCount];
+        if (pDst) memcpy(pDst, pSrc, itemCount * itemSize);
+        return pDst;
+    }
     case MSG_DATA_ORDER: {
         TDF_ORDER* pSrc = static_cast<TDF_ORDER*>(src->pData);
         TDF_ORDER* pDst = new (std::nothrow) TDF_ORDER[itemCount];
@@ -66,6 +72,9 @@ void freeTDF_MSG(TDF_MSG* pMsg) {
     // 释放数据体
     if (pMsg->pData) {
         switch (pMsg->nDataType) {
+        case MSG_DATA_MARKET:
+            delete[] static_cast<TDF_MARKET_DATA*>(pMsg->pData);
+            break;
         case MSG_DATA_ORDER:
             delete[] static_cast<TDF_ORDER*>(pMsg->pData);
             break;
@@ -158,6 +167,17 @@ void TdfMsgData::copyMsgData(const TDF_MSG* src) {
         {
             switch (src->nDataType)
             {
+            case MSG_DATA_MARKET:
+            {
+                TDF_MARKET_DATA* pSrc = static_cast<TDF_MARKET_DATA*>(src->pData);
+                TDF_MARKET_DATA* pDst = new (std::nothrow) TDF_MARKET_DATA[itemCount];
+                if (pDst)
+                {
+                    memcpy(pDst, pSrc, itemCount * itemSize);
+                    msg.pData = pDst;
+                }
+                break;
+            }
             case MSG_DATA_ORDER:
             {
                 TDF_ORDER* pSrc = static_cast<TDF_ORDER*>(src->pData);
@@ -198,6 +218,9 @@ void TdfMsgData::freeMsgData() {
     // 释放数据体
     if (msg.pData) {
         switch (msg.nDataType) {
+        case MSG_DATA_MARKET:
+            delete[] static_cast<TDF_MARKET_DATA*>(msg.pData);
+            break;
         case MSG_DATA_ORDER:
             delete[] static_cast<TDF_ORDER*>(msg.pData);
             break;

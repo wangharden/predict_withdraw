@@ -34,6 +34,8 @@ public:
 
     // 处理委托数据
     void processOrder(const TDF_ORDER& order);
+    // 处理快照数据（更新涨停价）
+    void processMarketData(const TDF_MARKET_DATA& md);
     // 处理成交数据
     void processTransaction(const TDF_TRANSACTION& trans);
     // 计算封板后任意时刻过去1000ms总成交量
@@ -58,6 +60,13 @@ public:
     double m_limitUpPrice;                // 涨停价
 
 private:
+    bool isSHMarket() const;
+    bool isSZMarket() const;
+    int64_t getLimitUpPriceRaw() const;
+    bool isLimitUpRawPrice(int64_t rawPrice) const;
+    void onSellSumThresholdHit(OrderIdType currentOrderId, int eventTime, const char* reason);
+
+private:
     const StockCode m_stockCode;          // 股票代码
     TimeStamp m_T1;                       // 首次封板时间（微秒）
     VolumeType m_buyOrderVolume;          // 封板后40ms内委买存量
@@ -65,6 +74,10 @@ private:
     OrderIdType m_FBOrder;                // 首次封板委托单号
     bool m_isLimitUp;                     // 是否已封板
     TimeStamp m_lastCalcTime;             // 最后计算时间
+    bool m_flagOrderInitialized;          // 卖侧flag_order是否已初始化
+    OrderIdType m_flagOrder;              // 卖侧基准委托号
+    int64_t m_sumAmountRaw;               // 卖侧累计金额（raw: price_raw*volume）
+    int m_triggerCount50w;                // 50万阈值触发次数
 
     std::vector<TDF_ORDER> m_orderHistory;    // 委托历史（用于1000ms统计）
     std::vector<TDF_TRANSACTION> m_transHistory; // 成交历史（用于1000ms统计）

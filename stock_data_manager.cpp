@@ -1,10 +1,18 @@
 #include "stock_data_manager.h"
 #include "stock_data_manager_factory.h"
+#include "spdlog_api.h"
 #include <iostream>
 #include <cstdio>
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
 using std::cout;
+
+namespace {
+constexpr int kStartTime0930 = 93000000;                      // HHMMSSmmm
+constexpr int64_t kThreshold50wRaw = 500000LL * 10000LL;      // 50万（元）换算到 raw price*volume 口径
+}
+
 // ===================== StockDataManager 实现 =====================
 StockDataManager::StockDataManager(const StockCode& stockCode)
     : m_stockCode(stockCode)
@@ -15,7 +23,72 @@ StockDataManager::StockDataManager(const StockCode& stockCode)
     , m_limitUpPrice(0.0)
     , m_isLimitUp(false)
     , m_lastCalcTime(0)
+    , m_flagOrderInitialized(false)
+    , m_flagOrder(0)
+    , m_sumAmountRaw(0)
+    , m_triggerCount50w(0)
 {}
+
+bool StockDataManager::isSHMarket() const
+{
+    return m_stockCode.size() >= 3 && m_stockCode.find(".SH") != std::string::npos;
+}
+
+bool StockDataManager::isSZMarket() const
+{
+    return m_stockCode.size() >= 3 && m_stockCode.find(".SZ") != std::string::npos;
+}
+
+int64_t StockDataManager::getLimitUpPriceRaw() const
+{
+    if (m_limitUpPrice <= 0.0)
+    {
+        return 0;
+    }
+    return static_cast<int64_t>(std::llround(m_limitUpPrice * 10000.0));
+}
+
+bool StockDataManager::isLimitUpRawPrice(int64_t rawPrice) const
+{
+    const int64_t limitUpRaw = getLimitUpPriceRaw();
+    return limitUpRaw > 0 && rawPrice == limitUpRaw;
+}
+
+void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eventTime, const char* reason)
+{
+    OrderIdType oldFlagOrder = m_flagOrder;
+    int64_t sumBefore = m_sumAmountRaw;
+
+    m_flagOrder = currentOrderId;
+    m_sumAmountRaw = 0; // 按需求：sum刷新用sum=0
+    ++m_triggerCount50w;
+
+    if (s_spLogger)
+    {
+        s_spLogger->info("[LIMITUP_SELL_50W] code={} time={} reason={} flag_order_old={} flag_order_new={} sum_before={} sum_after={} trigger={}",
+            m_stockCode,
+            eventTime,
+            reason ? reason : "",
+            static_cast<unsigned long long>(oldFlagOrder),
+            static_cast<unsigned long long>(m_flagOrder),
+            static_cast<long long>(sumBefore),
+            static_cast<long long>(m_sumAmountRaw),
+            m_triggerCount50w);
+    }
+    else
+    {
+        std::cout << "[LIMITUP_SELL_50W] code=" << m_stockCode
+                  << " time=" << eventTime
+                  << " reason=" << (reason ? reason : "")
+                  << " flag_order_old=" << oldFlagOrder
+                  << " flag_order_new=" << m_flagOrder
+                  << " sum_before=" << sumBefore
+                  << " sum_after=" << m_sumAmountRaw
+                  << " trigger=" << m_triggerCount50w
+                  << std::endl;
+    }
+}
+
 TimeStamp StockDataManager::time_to_no(TimeStamp m_time)
 {
     if (m_time < 130000000)
@@ -25,12 +98,130 @@ TimeStamp StockDataManager::time_to_no(TimeStamp m_time)
 }
 void StockDataManager::processOrder(const TDF_ORDER& order)
 {
-    
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    if (order.nTime < kStartTime0930)
+    {
+        return;
+    }
+
+    const bool isSell = (order.chFunctionCode == 'S');
+    if (!isSell)
+    {
+        return;
+    }
+
+    const bool isShCancel = isSHMarket() && (order.chOrderKind == 'D');
+
+    // 新增卖单和上海撤单都按涨停价位过滤
+    if (!isLimitUpRawPrice(order.nPrice))
+    {
+        return;
+    }
+
+    const OrderIdType orderId = (order.nOrder > 0) ? static_cast<OrderIdType>(order.nOrder) : 0;
+    if (orderId == 0)
+    {
+        return;
+    }
+
+    // 初始化flag：09:30后首笔涨停价卖委托（不包含撤单）
+    if (!m_flagOrderInitialized && !isShCancel)
+    {
+        m_flagOrder = orderId;
+        m_flagOrderInitialized = true;
+        m_sumAmountRaw = 0;
+        return;
+    }
+
+    if (!m_flagOrderInitialized)
+    {
+        return;
+    }
+
+    if (orderId <= m_flagOrder)
+    {
+        return;
+    }
+
+    const int64_t delta = static_cast<int64_t>(order.nPrice) * static_cast<int64_t>(order.nVolume);
+    if (delta <= 0)
+    {
+        return;
+    }
+
+    // 上海撤单在order流里扣减
+    if (isShCancel)
+    {
+        m_sumAmountRaw = (m_sumAmountRaw > delta) ? (m_sumAmountRaw - delta) : 0;
+        return;
+    }
+
+    // 普通卖委托新增累计
+    m_sumAmountRaw += delta;
+    if (m_sumAmountRaw >= kThreshold50wRaw)
+    {
+        onSellSumThresholdHit(orderId, order.nTime, "order_add");
+    }
+}
+
+void StockDataManager::processMarketData(const TDF_MARKET_DATA& md)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (md.nHighLimited > 0)
+    {
+        m_limitUpPrice = static_cast<double>(md.nHighLimited) / 10000.0;
+    }
 }
 
 void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
 {
-  
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    if (!m_flagOrderInitialized)
+    {
+        return;
+    }
+    if (trans.nTime < kStartTime0930)
+    {
+        return;
+    }
+
+    const OrderIdType askOrder = (trans.nAskOrder > 0) ? static_cast<OrderIdType>(trans.nAskOrder) : 0;
+    if (askOrder == 0 || askOrder <= m_flagOrder)
+    {
+        return;
+    }
+
+    const bool isSzCancel = isSZMarket() && (trans.chFunctionCode == 'C');
+
+    int64_t priceRaw = 0;
+    if (isSzCancel)
+    {
+        // 深圳撤单在trade流里，样本中tradePrice为0；这里按“涨停价位撤单”使用涨停价补价
+        priceRaw = getLimitUpPriceRaw();
+        if (priceRaw <= 0)
+        {
+            return;
+        }
+    }
+    else
+    {
+        // 成交扣减只统计涨停价成交
+        if (!isLimitUpRawPrice(trans.nPrice))
+        {
+            return;
+        }
+        priceRaw = static_cast<int64_t>(trans.nPrice);
+    }
+
+    const int64_t delta = priceRaw * static_cast<int64_t>(trans.nVolume);
+    if (delta <= 0)
+    {
+        return;
+    }
+
+    m_sumAmountRaw = (m_sumAmountRaw > delta) ? (m_sumAmountRaw - delta) : 0;
 }
 
 VolumeType StockDataManager::calcLast1000msVolume(TimeStamp currentTime)
@@ -144,6 +335,10 @@ void StockDataManager::reset()
     m_FBOrder = 0;
     m_isLimitUp = false;
     m_limitUpPrice = 0.0;
+    m_flagOrderInitialized = false;
+    m_flagOrder = 0;
+    m_sumAmountRaw = 0;
+    m_triggerCount50w = 0;
     m_orderHistory.clear();
     m_transHistory.clear();
 }

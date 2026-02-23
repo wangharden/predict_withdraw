@@ -54,15 +54,14 @@ int main(int argc, char*argv[])
         return 0;
     }
 
-    // 行情模块已禁用 - 当前功能不需要行情数据
-    // MarketDataApi market_data_api;
-    // MarketDataProcessor market_data_processor;
-    // market_data_processor.startProcessThread(trader_api, settings_manager);
-    // if(false == market_data_api.connect(settings_manager))
-    // {
-    //     std::cerr << "行情服务器 连接 失败" << std::endl;
-    //     return 0;
-    // }
+    MarketDataApi market_data_api;
+    MarketDataProcessor market_data_processor;
+    market_data_processor.startProcessThread(trader_api, settings_manager);
+    if(false == market_data_api.connect(settings_manager))
+    {
+        std::cerr << "行情服务器 连接 失败" << std::endl;
+        return 0;
+    }
 
     int i = 0;
     while (true)

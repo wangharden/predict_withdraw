@@ -1,0 +1,10 @@
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [info] 当前线程id为: 12364
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [info] 当前线程id为: 12364,------------------------------------------程序启动-----------------------------------------
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [info] 当前线程id为: 12364,程序日志文件打开成功: server_logs/server_buy_withdraw_log_2026-02-23
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [info] 当前线程id为: 12364,the setting file name is account.ini.
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [info] 当前线程id为: 12364,配置文件读取成功！trading.Khh=010000227342, market.user=test
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [info] 当前线程id为: 12364,配置读取成功:account.ini
+[2026-02-23 20:20:38.667] [server_buy_withdraw] [error] 当前线程id为: 12364,数据加载结束，总共加载白名单股票数:0
+[2026-02-23 20:20:38.697] [server_buy_withdraw] [info] 当前线程id为: 12364,veriosn:SECITPDK V5.2.52.0
+[2026-02-23 20:20:38.701] [server_buy_withdraw] [error] 当前线程id为: 12364,Login failed. Msg:connect failed.[key:MA2AG64A0,addr:]
+

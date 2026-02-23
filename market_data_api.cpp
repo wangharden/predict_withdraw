@@ -26,7 +26,7 @@ MarketDataApi::MarketDataApi()
     //settings.szMarkets = "SZ-2-0;";
     settings.szMarkets = "";
     settings.szSubScriptions = "605287.SH";
-    settings.nTypeFlags = DATA_TYPE_TRANSACTION|DATA_TYPE_ORDER;  // 快照自动推送 + 逐笔成交
+    settings.nTypeFlags = DATA_TYPE_TRANSACTION|DATA_TYPE_ORDER;  
 }
 
 bool MarketDataApi::connect(const SettingsManager &settings_manager)
@@ -75,7 +75,9 @@ void MarketDataApi::OnDataReceived(THANDLE hTdf, TDF_MSG* pMsgHead)
             s_spLogger->error("MarketDataApi::OnDataReceived: pMsgHead is null, discard"); // 日志告警
             return;
         }
-        if (pMsgHead->nDataType == MSG_DATA_TRANSACTION || pMsgHead->nDataType == MSG_DATA_ORDER)
+        if (pMsgHead->nDataType == MSG_DATA_TRANSACTION ||
+            pMsgHead->nDataType == MSG_DATA_ORDER ||
+            pMsgHead->nDataType == MSG_DATA_MARKET)
         {   //mid 源头过滤,减少无效处理
             MsgQueue::getInstance().push(hTdf, pMsgHead);
         }

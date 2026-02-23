@@ -27,6 +27,8 @@ private:
     void handleOrderData(const TdfMsgData& data);
     // 业务处理函数：解析 TRANSACTION 数据
     void handleTransactionData(const TdfMsgData& data);
+    // 业务处理函数：解析 MARKET 快照数据（用于更新涨停价）
+    void handleMarketData(const TdfMsgData& data);
 
     std::thread m_processThread;       // 处理线程对象
     std::atomic<bool> m_threadRunning; // 线程运行标记（原子变量，线程安全）

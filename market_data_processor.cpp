@@ -77,8 +77,10 @@ void MarketDataProcessor::processMsgThreadFunc()
             case MSG_DATA_TRANSACTION:
                 handleTransactionData(data);
                 break;
-                // 其他类型暂不处理
             case MSG_DATA_MARKET:
+                handleMarketData(data);
+                break;
+                // 其他类型暂不处理
             case MSG_DATA_ORDERQUEUE:
                 break;
             default:
@@ -101,12 +103,74 @@ void MarketDataProcessor::processMsgThreadFunc()
 // 处理 ORDER 数据
 void MarketDataProcessor::handleOrderData(const TdfMsgData& data)
 {
-    //std::cout << "handleOrderData : new order." << std::endl;
-    
+    const TDF_MSG& msg = data.msg;
+    if (msg.pAppHead == nullptr || msg.pData == nullptr)
+    {
+        std::cerr << "ORDER data is null" << std::endl;
+        return;
+    }
+
+    const TDF_APP_HEAD* pAppHead = msg.pAppHead;
+    TDF_ORDER* pOrders = static_cast<TDF_ORDER*>(msg.pData);
+    const int itemCount = pAppHead->nItemCount;
+
+    for (int i = 0; i < itemCount; ++i)
+    {
+        const TDF_ORDER& order = pOrders[i];
+        StockDataManager* mgr = StockDataManagerFactory::getInstance().getStockManager(order.szWindCode);
+        if (mgr)
+        {
+            mgr->processOrder(order);
+        }
+    }
 }
 
 // 处理 TRANSACTION 数据
 void MarketDataProcessor::handleTransactionData(const TdfMsgData& data)
 {
-    
+    const TDF_MSG& msg = data.msg;
+    if (msg.pAppHead == nullptr || msg.pData == nullptr)
+    {
+        std::cerr << "TRANSACTION data is null" << std::endl;
+        return;
+    }
+
+    const TDF_APP_HEAD* pAppHead = msg.pAppHead;
+    TDF_TRANSACTION* pTrans = static_cast<TDF_TRANSACTION*>(msg.pData);
+    const int itemCount = pAppHead->nItemCount;
+
+    for (int i = 0; i < itemCount; ++i)
+    {
+        const TDF_TRANSACTION& trans = pTrans[i];
+        StockDataManager* mgr = StockDataManagerFactory::getInstance().getStockManager(trans.szWindCode);
+        if (mgr)
+        {
+            mgr->processTransaction(trans);
+        }
+    }
+}
+
+// 处理 MARKET 快照数据（更新涨停价）
+void MarketDataProcessor::handleMarketData(const TdfMsgData& data)
+{
+    const TDF_MSG& msg = data.msg;
+    if (msg.pAppHead == nullptr || msg.pData == nullptr)
+    {
+        std::cerr << "MARKET data is null" << std::endl;
+        return;
+    }
+
+    const TDF_APP_HEAD* pAppHead = msg.pAppHead;
+    TDF_MARKET_DATA* pMarket = static_cast<TDF_MARKET_DATA*>(msg.pData);
+    const int itemCount = pAppHead->nItemCount;
+
+    for (int i = 0; i < itemCount; ++i)
+    {
+        const TDF_MARKET_DATA& md = pMarket[i];
+        StockDataManager* mgr = StockDataManagerFactory::getInstance().getStockManager(md.szWindCode);
+        if (mgr)
+        {
+            mgr->processMarketData(md);
+        }
+    }
 }
