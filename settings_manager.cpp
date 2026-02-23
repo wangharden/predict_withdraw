@@ -4,8 +4,23 @@
 #include "rapidjson/document.h"
 #include "rapidjson/filereadstream.h"
 #include <iostream>
+#include <cctype>
+#include <cstring>
 
 using namespace rapidjson;
+
+namespace {
+bool ends_with_ci(const std::string& s, const char* suffix) {
+    const size_t n = std::strlen(suffix);
+    if (s.size() < n) return false;
+    for (size_t i = 0; i < n; ++i) {
+        char a = static_cast<char>(std::toupper(static_cast<unsigned char>(s[s.size() - n + i])));
+        char b = static_cast<char>(std::toupper(static_cast<unsigned char>(suffix[i])));
+        if (a != b) return false;
+    }
+    return true;
+}
+}
 
 bool fileExists(const std::string& path) {
     FILE* file = fopen(path.c_str(), "r");
@@ -65,16 +80,57 @@ bool SettingsManager::load_white_list(const std::string& filename) {
             continue;
         }
 
-        // 转换字符串为double并存储
-        std::string code_sh = stockCode + ".SH";
-        //std::cout << "code_sh:" << code_sh << std::endl;
-        stock_codes.push_back(code_sh);
+        std::string windCode = stockCode;
+
+        // 支持 key 直接写成 600000.SH / 000001.SZ
+        if (ends_with_ci(windCode, ".SH") || ends_with_ci(windCode, ".SZ")) {
+            // 统一后缀大写
+            if (windCode.size() >= 3) {
+                for (size_t i = windCode.size() - 2; i < windCode.size(); ++i) {
+                    windCode[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(windCode[i])));
+                }
+            }
+            stock_codes.push_back(windCode);
+            continue;
+        }
+
+        // 支持 key 写 6 位纯代码：6开头默认SH，其他默认SZ
+        if (windCode.length() == 6) {
+            bool all_digit = true;
+            for (char ch : windCode) {
+                if (!std::isdigit(static_cast<unsigned char>(ch))) {
+                    all_digit = false;
+                    break;
+                }
+            }
+            if (all_digit) {
+                if (windCode.substr(0, 1) == "6")
+                    windCode += ".SH";
+                else
+                    windCode += ".SZ";
+                stock_codes.push_back(windCode);
+                continue;
+            }
+        }
+
+        s_spLogger->warn("当前线程id为: {},白名单股票代码格式无法识别，跳过:{}", thread_id(), stockCode);
     }
     s_spLogger->error("当前线程id为: {},数据加载结束，总共加载白名单股票数:{}",thread_id(),stock_codes.size());
 
     std::cout << "白名单加载成功:" << stock_codes.size() << std::endl;
     s_spLogger->flush();
     return true;
+}
+
+std::string SettingsManager::get_codes_string() const
+{
+    std::string stock_codes_string;
+    stock_codes_string.reserve(stock_codes.size() * 10);
+    for (const auto& stock_code : stock_codes)
+    {
+        stock_codes_string += ";" + stock_code;
+    }
+    return stock_codes_string;
 }
 
 bool SettingsManager::load_account_settings(std::string account_file)

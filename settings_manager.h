@@ -36,18 +36,7 @@ public:
         return stock_codes;
     }
 
-    const std::string& get_codes_string() const
-    {
-        std::cout << get_codes_vector().size() << std::endl;
-        std::string stock_codes_string;
-        for(const auto & stock_code:get_codes_vector())
-        {
-            stock_codes_string +=  ";" + stock_code;
-        }
-        std::cout << stock_codes_string.size() << std::endl;
-        //std::cout << stock_codes_string << std::endl;
-        return stock_codes_string;
-    };
+    std::string get_codes_string() const;
 
 private:
     bool readAccountConfig(std::string file_name);
