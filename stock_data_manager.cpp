@@ -57,7 +57,6 @@ bool StockDataManager::isLimitUpRawPrice(int64_t rawPrice) const
 void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eventTime, const char* reason)
 {
     OrderIdType oldFlagOrder = m_flagOrder;
-    int64_t sumBefore = m_sumAmountRaw;
 
     m_flagOrder = currentOrderId;
     m_sumAmountRaw = 0; // 按需求：sum刷新用sum=0
@@ -65,14 +64,12 @@ void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eve
 
     if (s_spLogger)
     {
-        s_spLogger->info("[LIMITUP_SELL_50W] code={} time={} reason={} flag_order_old={} flag_order_new={} sum_before={} sum_after={} trigger={}",
+        s_spLogger->info("[LIMITUP_SELL_50W] code={} time={} reason={} flag_order_old={} flag_order_new={} trigger={}",
             m_stockCode,
             eventTime,
             reason ? reason : "",
             static_cast<unsigned long long>(oldFlagOrder),
             static_cast<unsigned long long>(m_flagOrder),
-            static_cast<long long>(sumBefore),
-            static_cast<long long>(m_sumAmountRaw),
             m_triggerCount50w);
     }
     else
@@ -82,8 +79,6 @@ void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eve
                   << " reason=" << (reason ? reason : "")
                   << " flag_order_old=" << oldFlagOrder
                   << " flag_order_new=" << m_flagOrder
-                  << " sum_before=" << sumBefore
-                  << " sum_after=" << m_sumAmountRaw
                   << " trigger=" << m_triggerCount50w
                   << std::endl;
     }
@@ -157,6 +152,12 @@ void StockDataManager::processOrder(const TDF_ORDER& order)
         return;
     }
 
+    // 首次封板后终止“涨停价卖单新增累计金额”功能
+    if (m_isLimitUp)
+    {
+        return;
+    }
+
     // 普通卖委托新增累计
     m_sumAmountRaw += delta;
     if (m_sumAmountRaw >= kThreshold50wRaw)
@@ -178,11 +179,32 @@ void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    if (!m_flagOrderInitialized)
+    if (trans.nTime < kStartTime0930)
     {
         return;
     }
-    if (trans.nTime < kStartTime0930)
+
+    // 新需求1：首次完成封板打印
+    // 解释：按你描述的“成交价=涨停价 且 function为S 的成交回报”，这里使用成交买卖方向 nBSFlag=='S'
+    // （上海逐笔成交 chFunctionCode 常为空，不能用于判断买卖方向）
+    const bool isSellTrade = (static_cast<char>(trans.nBSFlag) == 'S');
+    if (!m_isLimitUp && isSellTrade && isLimitUpRawPrice(trans.nPrice))
+    {
+        m_isLimitUp = true;
+        m_T1 = trans.nTime;
+
+        const int hhmmss = trans.nTime / 1000;
+        if (s_spLogger)
+        {
+            s_spLogger->info("[LIMITUP_SEAL] {} 股票在 {:06d} 实现封板", m_stockCode, hhmmss);
+        }
+        else
+        {
+            std::cout << "[LIMITUP_SEAL] " << m_stockCode << " 股票在 " << hhmmss << " 实现封板" << std::endl;
+        }
+    }
+
+    if (!m_flagOrderInitialized)
     {
         return;
     }
