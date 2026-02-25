@@ -11,3 +11,7 @@ file_manager
 # 日志
 log/
 server_logs/
+
+# 离线耗时分析
+time_spend.log
+server_logs/

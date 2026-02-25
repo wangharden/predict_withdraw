@@ -7,6 +7,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <thread>
+#include <atomic>
 
 #include <queue>
 #include <memory>
@@ -155,7 +156,7 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::thread m_workerThread;
-    bool m_isRunning;
+    std::atomic<bool> m_isRunning;
     std::queue<std::tuple<std::string, stStructMsg, int>> m_msgQueue;
     std::queue<LimitUpTrigger> m_limitupTriggerQueue;
 

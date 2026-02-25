@@ -33,16 +33,16 @@ OrderManagerWithdraw::~OrderManagerWithdraw()
 
 void OrderManagerWithdraw::startWorkerThread()
 {
-    if (!m_isRunning) {
-        m_isRunning = true;
+    if (!m_isRunning.load()) {
+        m_isRunning.store(true);
         m_workerThread = std::thread(&OrderManagerWithdraw::workerThread, this);
     }
 }
 
 void OrderManagerWithdraw::stopWorkerThread()
 {
-    if (m_isRunning) {
-        m_isRunning = false;
+    if (m_isRunning.load()) {
+        m_isRunning.store(false);
         m_cv.notify_one();
         if (m_workerThread.joinable()) {
             m_workerThread.join();
@@ -268,7 +268,7 @@ void OrderManagerWithdraw::handleMessage(const char* pTime, const stStructMsg &s
 
 void OrderManagerWithdraw::workerThread()
 {
-    while (m_isRunning) {
+    while (m_isRunning.load()) {
         std::tuple<std::string, stStructMsg, int> msg;
         LimitUpTrigger trigger;
         bool hasTradeMsg = false;
@@ -278,10 +278,10 @@ void OrderManagerWithdraw::workerThread()
         {
             std::unique_lock<std::mutex> lock(m_mutex);
             m_cv.wait_for(lock, std::chrono::milliseconds(kWorkerWakeupMs), [this] {
-                return !m_isRunning || !m_msgQueue.empty() || !m_limitupTriggerQueue.empty();
+                return !m_isRunning.load() || !m_msgQueue.empty() || !m_limitupTriggerQueue.empty();
             });
 
-            if (!m_isRunning) break;
+            if (!m_isRunning.load()) break;
 
             if (!m_msgQueue.empty()) {
                 msg = std::move(m_msgQueue.front());
