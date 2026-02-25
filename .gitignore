@@ -1,0 +1,13 @@
+# 编译产物
+*.exe
+*.o
+*.a
+*.so
+file_manager
+
+# 行情测试目录（原doc/，整体忽略）
+行情测试/
+
+# 日志
+log/
+server_logs/

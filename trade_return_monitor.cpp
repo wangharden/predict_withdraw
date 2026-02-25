@@ -199,12 +199,13 @@ void TradeReturnMonitor::on_match(const stStructMsg& msg) {
         }
 
         // 再发送一笔本方最优价格委托
+        // 注意：本方最优价格委托仍需传实际价格，传0会触发价格笼子校验导致废单
         int64_t nRet2 = SECITPDK_OrderEntrust(khh_.c_str(),
                                              "SZ",
                                              followup_stock_key.c_str(),
                                              JYLB_BUY,
                                              100,
-                                             followup_price,  // 本方最优价格类型，价格参数传0
+                                             followup_price,  // 传实际价格（传0会因价格笼子导致废单）
                                              102,  // DDLX_SZSB_BFZYJ 本方最优价格
                                              sz_gdh_.c_str());
         if (nRet2 > 0) {

@@ -44,6 +44,11 @@ int main(int argc, char*argv[])
         return 0;
     }
 
+    // 配置本策略下单/撤单所需账户信息
+    orderManagerWithdraw->set_trading_account_info(settings_manager.get_trading_Khh(),
+                                                   settings_manager.get_trading_sh_gdh(),
+                                                   settings_manager.get_trading_sz_gdh());
+
     TradeReturnMonitor trade_return_monitor(settings_manager);
     orderManagerWithdraw->set_trade_return_monitor(&trade_return_monitor);
     trade_return_monitor.start();

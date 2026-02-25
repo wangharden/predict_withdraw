@@ -1,11 +1,13 @@
 #include "stock_data_manager.h"
 #include "stock_data_manager_factory.h"
+#include "order_manager_withdraw.h"
 #include "spdlog_api.h"
 #include <iostream>
 #include <cstdio>
 #include <stdexcept>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 using std::cout;
 
 namespace {
@@ -27,6 +29,9 @@ StockDataManager::StockDataManager(const StockCode& stockCode)
     , m_flagOrder(0)
     , m_sumAmountRaw(0)
     , m_triggerCount50w(0)
+    , m_basePriceRaw(0)
+    , m_basePriceReady(false)
+    , m_price107Triggered(false)
 {}
 
 bool StockDataManager::isSHMarket() const
@@ -57,10 +62,13 @@ bool StockDataManager::isLimitUpRawPrice(int64_t rawPrice) const
 void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eventTime, const char* reason)
 {
     OrderIdType oldFlagOrder = m_flagOrder;
+    
 
     m_flagOrder = currentOrderId;
     m_sumAmountRaw = 0; // 按需求：sum刷新用sum=0
     ++m_triggerCount50w;
+    // 设计约束：一旦已被“50万阈值”触发启动，则不再需要/不再检查 1.07 触发
+    m_price107Triggered = true;
 
     if (s_spLogger)
     {
@@ -70,6 +78,7 @@ void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eve
             reason ? reason : "",
             static_cast<unsigned long long>(oldFlagOrder),
             static_cast<unsigned long long>(m_flagOrder),
+
             m_triggerCount50w);
     }
     else
@@ -81,6 +90,22 @@ void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eve
                   << " flag_order_new=" << m_flagOrder
                   << " trigger=" << m_triggerCount50w
                   << std::endl;
+    }
+
+    // 触发下单：每次达到50万阈值（含第一次）触发一次（忙时覆盖抑制在OrderManagerWithdraw侧实现）
+    if (orderManagerWithdraw)
+    {
+        LimitUpTrigger trig;
+        trig.type = LimitUpTriggerType::SELL_SUM_50W;
+        trig.symbol = m_stockCode;
+        trig.event_time = eventTime;
+        trig.limitup_raw = getLimitUpPriceRaw();
+        trig.base_raw = m_basePriceReady ? m_basePriceRaw : 0;
+        trig.signal_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+        trig.trigger_count_50w = m_triggerCount50w;
+        orderManagerWithdraw->post_limitup_trigger(std::move(trig));
     }
 }
 
@@ -172,6 +197,20 @@ void StockDataManager::processMarketData(const TDF_MARKET_DATA& md)
     if (md.nHighLimited > 0)
     {
         m_limitUpPrice = static_cast<double>(md.nHighLimited) / 10000.0;
+
+        // 基准价：用快照涨停价倒推 base = round(limitup/1.1 + 1e-6)（按0.01 tick口径）
+        if (!m_basePriceReady)
+        {
+            const int64_t limitup_raw = static_cast<int64_t>(md.nHighLimited);
+            const int64_t limitup_tick = limitup_raw / 100; // 0.01 元
+            const int64_t base_tick = static_cast<int64_t>(std::llround(static_cast<double>(limitup_tick) / 1.1 + 1e-6));
+            const int64_t base_raw = base_tick * 100; // 回到*10000口径
+            if (base_raw > 0)
+            {
+                m_basePriceRaw = base_raw;
+                m_basePriceReady = true;
+            }
+        }
     }
 }
 
@@ -184,11 +223,14 @@ void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
         return;
     }
 
+    // 显式排除深圳撤单记录，避免将撤单误当成成交触发 PRICE_107 / 封板判定
+    const bool isSzCancel = isSZMarket() && (trans.chFunctionCode == 'C');
+
     // 新需求1：首次完成封板打印
     // 解释：按你描述的“成交价=涨停价 且 function为S 的成交回报”，这里使用成交买卖方向 nBSFlag=='S'
     // （上海逐笔成交 chFunctionCode 常为空，不能用于判断买卖方向）
     const bool isSellTrade = (static_cast<char>(trans.nBSFlag) == 'S');
-    if (!m_isLimitUp && isSellTrade && isLimitUpRawPrice(trans.nPrice))
+    if (!isSzCancel && !m_isLimitUp && isSellTrade && isLimitUpRawPrice(trans.nPrice))
     {
         m_isLimitUp = true;
         m_T1 = trans.nTime;
@@ -202,6 +244,46 @@ void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
         {
             std::cout << "[LIMITUP_SEAL] " << m_stockCode << " 股票在 " << hhmmss << " 实现封板" << std::endl;
         }
+
+        // 封板后停止本策略：通知交易回报线程（忙时允许当前闭环完成）
+        if (orderManagerWithdraw)
+        {
+            LimitUpTrigger trig;
+            trig.type = LimitUpTriggerType::SEALED_STOP;
+            trig.symbol = m_stockCode;
+            trig.event_time = trans.nTime;
+            trig.limitup_raw = getLimitUpPriceRaw();
+            trig.base_raw = m_basePriceReady ? m_basePriceRaw : 0;
+            trig.tick_raw = static_cast<int64_t>(trans.nPrice);
+            trig.signal_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        std::chrono::steady_clock::now().time_since_epoch())
+                                        .count();
+            orderManagerWithdraw->post_limitup_trigger(std::move(trig));
+        }
+    }
+
+    // 1.07 触发：逐笔成交价 > base * 1.07（仅一次；封板后停止）
+    if (!isSzCancel && !m_isLimitUp && !m_price107Triggered && m_basePriceReady && m_basePriceRaw > 0)
+    {
+        const int64_t tickRaw = static_cast<int64_t>(trans.nPrice);
+        if (tickRaw > 0 && tickRaw * 100 > m_basePriceRaw * 107)
+        {
+            m_price107Triggered = true;
+            if (orderManagerWithdraw)
+            {
+                LimitUpTrigger trig;
+                trig.type = LimitUpTriggerType::PRICE_107;
+                trig.symbol = m_stockCode;
+                trig.event_time = trans.nTime;
+                trig.limitup_raw = getLimitUpPriceRaw();
+                trig.base_raw = m_basePriceRaw;
+                trig.tick_raw = tickRaw;
+                trig.signal_steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count();
+                orderManagerWithdraw->post_limitup_trigger(std::move(trig));
+            }
+        }
     }
 
     if (!m_flagOrderInitialized)
@@ -214,8 +296,6 @@ void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
     {
         return;
     }
-
-    const bool isSzCancel = isSZMarket() && (trans.chFunctionCode == 'C');
 
     int64_t priceRaw = 0;
     if (isSzCancel)
@@ -361,6 +441,9 @@ void StockDataManager::reset()
     m_flagOrder = 0;
     m_sumAmountRaw = 0;
     m_triggerCount50w = 0;
+    m_basePriceRaw = 0;
+    m_basePriceReady = false;
+    m_price107Triggered = false;
     m_orderHistory.clear();
     m_transHistory.clear();
 }

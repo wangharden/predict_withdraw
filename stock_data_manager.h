@@ -78,6 +78,9 @@ private:
     OrderIdType m_flagOrder;              // 卖侧基准委托号
     int64_t m_sumAmountRaw;               // 卖侧累计金额（raw: price_raw*volume）
     int m_triggerCount50w;                // 50万阈值触发次数
+    int64_t m_basePriceRaw;               // 基准价 raw(*10000)，由快照涨停价倒推
+    bool m_basePriceReady;                // 基准价是否就绪
+    bool m_price107Triggered;             // 1.07触发是否已触发过（仅一次）
 
     std::vector<TDF_ORDER> m_orderHistory;    // 委托历史（用于1000ms统计）
     std::vector<TDF_TRANSACTION> m_transHistory; // 成交历史（用于1000ms统计）
