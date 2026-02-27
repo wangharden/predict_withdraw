@@ -1,0 +1,108 @@
+Log file created at: 2026/02/27 09:09:19
+Running on machine: localhost.localdomain
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I0227 09:09:19.777657 25170 TDFAPI.cpp:568] TDF_SetLogPath, path= ./log
+I0227 09:09:19.777710 25170 TDFAPI.cpp:422] TDF_SetEnv, nEnv= 0, nValue= 10
+I0227 09:09:19.777714 25170 TDFAPI.cpp:422] TDF_SetEnv, nEnv= 1, nValue= 3
+I0227 09:09:19.777714 25170 TDFAPI.cpp:422] TDF_SetEnv, nEnv= 2, nValue= 30
+I0227 09:09:19.777753 25170 OpenManager.h:98] 创建一个Open实例：0x17b1d70
+I0227 09:09:19.777765 25213 OpenInstance.cpp:127] SysManagerThread 线程开始！
+I0227 09:09:19.779134 25170 TDFAPI.cpp:88] API ：TDFAPI3.4.8.20220831
+I0227 09:09:19.779136 25170 TDFAPI.cpp:108] call TDF_Open! szMarkets: szSubScriptions:605287.SH nTypeFlags:6 nConnectionID:0, nTime:0, nCodeType:0
+I0227 09:09:19.779138 25170 TDFAPI.cpp:114] nServerNum0:172.17.183.144 10002 junyue junyue
+I0227 09:09:19.779171 25170 ConnectionInstance.cpp:1771] 创建一个ConnectionInstance
+I0227 09:09:19.779186 25214 ConnectionInstance.cpp:1621] 开始尝试连接服务器！
+I0227 09:09:19.787524 25214 ConnectionInstance.cpp:1637] 连接服务器成功，开始登陆和取代码表！
+I0227 09:09:19.787537 25214 HHNetFrameProcessor_TDFAPI.cpp:616] 正在注册...
+I0227 09:09:19.787632 25214 HHNetFrameProcessor_TDFAPI.cpp:324] mac = 000f53ce37b0
+I0227 09:09:19.787645 25214 HHNetFrameProcessor_TDFAPI.cpp:618] 注册完成，等待结果...
+I0227 09:09:19.809345 25215 HHNetFrameProcessor_TDFAPI.cpp:86] 收到登陆响应！
+I0227 09:09:19.809358 25215 HHNetFrameProcessor_TDFAPI.cpp:710] SendDataTypeSubscription(DataType:11,SubStype:0
+I0227 09:09:19.809367 25215 HHNetFrameProcessor_TDFAPI.cpp:661] Add one CodeSubscription:strMarket SH,strCode 605287,SubStype 0
+I0227 09:09:19.809373 25215 HHNetFrameProcessor_TDFAPI.cpp:583] 请求心跳, time=10
+I0227 09:09:19.812463 25215 HHNetFrameProcessor_TDFAPI.cpp:409] ReceiveSubScriptionRsp!
+I0227 09:09:19.828092 25215 HHNetFrameProcessor_TDFAPI.cpp:409] ReceiveSubScriptionRsp!
+I0227 09:09:19.828118 25215 HHNetFrameProcessor_TDFAPI.cpp:486] 请求代码表: mkt=SH-1-1,User=junyue
+I0227 09:09:19.828132 25215 HHNetFrameProcessor_TDFAPI.cpp:486] 请求代码表: mkt=SH-2-0,User=junyue
+I0227 09:09:19.831801 25215 HHNetFrameProcessor_TDFAPI.cpp:91] 收到代码表响应！
+I0227 09:09:19.833546 25215 HHNetFrameProcessor_TDFAPI.cpp:460] 请求动态数据: mkt=SH-1-1,User=junyue,client_pos=-1,nType=0
+I0227 09:09:19.835425 25215 HHNetFrameProcessor_TDFAPI.cpp:91] 收到代码表响应！
+I0227 09:09:19.837698 25214 ConnectionInstance.cpp:1647] open成功!
+I0227 09:09:19.837714 25216 ConnectionInstance.cpp:21] DataHandlerThread 线程开始！
+I0227 09:09:19.837721 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-1-1 Count:30992
+I0227 09:09:19.837852 25216 ConnectionInstance.cpp:377] Decode Recv CodeTable Count:686
+I0227 09:09:19.838287 25216 ConnectionInstance.cpp:269] 代码表接收完毕，ExchId:SH-1-1,20260227
+I0227 09:09:19.838292 25216 ConnectionInstance.cpp:64] 收到非行情定义消息...
+I0227 09:09:19.838294 25216 ConnectionInstance.cpp:295] 接收非行情定义数据 Market:SH-2-0 Count:680
+I0227 09:09:19.879237 25170 TDFAPI.cpp:247] call TDF_SetSubscription api, nSubStyle is 0, szSubScriptions is 
+I0227 09:09:19.879242 25170 HHNetFrameProcessor_TDFAPI.cpp:625] 没有具体订阅代码，不发送请求
+I0227 09:09:20.059728 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-1-1 Count:30992
+I0227 09:09:20.059913 25216 ConnectionInstance.cpp:64] 收到非行情定义消息...
+I0227 09:09:20.059916 25216 ConnectionInstance.cpp:295] 接收非行情定义数据 Market:SH-2-0 Count:0
+I0227 09:09:20.063674 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-1-1 Count:0
+I0227 09:09:20.064026 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.065778 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-1-1 Count:0
+I0227 09:09:20.066092 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.068996 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-1-1 Count:0
+I0227 09:09:20.069123 25216 ConnectionInstance.cpp:377] Decode Recv CodeTable Count:686
+I0227 09:09:20.069375 25216 ConnectionInstance.cpp:143] 快照接收完毕，ExchId:SH-1-1 on 20260227,nDataPos=196400
+I0227 09:09:20.069427 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.071053 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.072901 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.075608 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.077127 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.078519 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.080078 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.081525 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.082868 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.084319 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.085628 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.087054 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.088786 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.090629 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.092275 25216 ConnectionInstance.cpp:228] 接收代码表数据 Market:SH-2-0 Count:30738
+I0227 09:09:20.092278 25215 HHNetFrameProcessor_TDFAPI.cpp:460] 请求动态数据: mkt=SH-2-0,User=junyue,client_pos=-1,nType=0
+I0227 09:09:20.095232 25216 ConnectionInstance.cpp:377] Decode Recv CodeTable Count:25420
+I0227 09:09:20.113296 25216 ConnectionInstance.cpp:269] 代码表接收完毕，ExchId:SH-2-0,20260227
+I0227 09:09:20.366379 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.367525 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.368513 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.369673 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.370762 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.371696 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.372637 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.373739 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.375453 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.376459 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.377388 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.378391 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.379294 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.380350 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.381191 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.382309 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:65395
+I0227 09:09:20.383126 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:23495
+I0227 09:09:20.384438 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.385740 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.387147 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.390137 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.391410 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.392585 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.393889 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.395138 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.396433 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.397713 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:29
+I0227 09:09:20.398522 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.399303 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.400020 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.400787 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.401610 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.403880 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.406227 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.407137 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.407756 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.408615 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:35
+I0227 09:09:20.409404 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:16
+I0227 09:09:20.411135 25216 ConnectionInstance.cpp:109] 接收行情快照数据 Market:SH-2-0 Count:0
+I0227 09:09:20.414393 25216 ConnectionInstance.cpp:377] Decode Recv CodeTable Count:25420
+I0227 09:09:20.424873 25216 ConnectionInstance.cpp:143] 快照接收完毕，ExchId:SH-2-0 on 20260227,nDataPos=1631548
+I0227 15:35:48.619107 25216 OpenInstance.cpp:949] 收到市场事件通知:marketKey:SH-2-0,，事件:4

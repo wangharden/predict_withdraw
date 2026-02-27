@@ -25,8 +25,8 @@ MarketDataApi::MarketDataApi()
     //settings.szMarkets = "SZ-2-0;SH-2-0";
     //settings.szMarkets = "SZ-2-0;";
     settings.szMarkets = "";
-    settings.szSubScriptions = "605287.SH";
-    settings.nTypeFlags = DATA_TYPE_TRANSACTION|DATA_TYPE_ORDER;  
+    settings.szSubScriptions = "";
+    settings.nTypeFlags = DATA_TYPE_TRANSACTION|DATA_TYPE_ORDER|DATA_TYPE_MARKET;  
 }
 
 bool MarketDataApi::connect(const SettingsManager &settings_manager)
@@ -41,6 +41,12 @@ bool MarketDataApi::connect(const SettingsManager &settings_manager)
     strncpy(settings.siServer[0].szUser, user_.c_str(), sizeof(settings.siServer[0].szUser) - 1);
     strncpy(settings.siServer[0].szPwd, password_.c_str(), sizeof(settings.siServer[0].szPwd) - 1);
 
+    // 白名单为空时全市场订阅，非空时连接后按代码订阅
+    const std::string codes_string = settings_manager.get_codes_string();
+    if (codes_string.empty()) {
+        settings.szMarkets = "SZ-2-0;SH-2-0";
+    }
+
     TDF_ERR err = TDF_ERR_SUCCESS;
 
     THANDLE tdf_handle_ = TDF_OpenExt(&settings, &err);
@@ -54,14 +60,12 @@ bool MarketDataApi::connect(const SettingsManager &settings_manager)
     {
         std::cout << "连接成功" << std::endl;
 
-//        TDF_SetSubscription(tdf_handle_, "600000.SH", SUBSCRIPTION_SET);
-//        const std::string code_list_string = settings_manager.get_codes_string();
-        //std::cout << "code string : " <<settings_manager.get_codes_string().c_str() << std::endl;
-        //std::string m_code_string = settings_manager.get_codes_string().substr(1);
-        char m_buf[20000];
-        std::snprintf(m_buf, sizeof(m_buf), "%s", settings_manager.get_codes_string().c_str());
-        TDF_SetSubscription(tdf_handle_, m_buf, SUBSCRIPTION_SET);
-        //TDF_SetSubscription(tdf_handle_, tmp_szSubScriptions, SUBSCRIPTION_SET);
+        // 白名单非空时按代码订阅；为空时已通过 szMarkets 全市场订阅
+        if (!codes_string.empty()) {
+            char m_buf[20000];
+            std::snprintf(m_buf, sizeof(m_buf), "%s", codes_string.c_str());
+            TDF_SetSubscription(tdf_handle_, m_buf, SUBSCRIPTION_SET);
+        }
         return true;
     }
 }
