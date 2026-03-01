@@ -26,7 +26,7 @@ MarketDataApi::MarketDataApi()
     //settings.szMarkets = "SZ-2-0;";
     settings.szMarkets = "";
     settings.szSubScriptions = "";
-    settings.nTypeFlags = DATA_TYPE_TRANSACTION|DATA_TYPE_ORDER|DATA_TYPE_MARKET;  
+    settings.nTypeFlags = DATA_TYPE_TRANSACTION | DATA_TYPE_ORDER;
 }
 
 bool MarketDataApi::connect(const SettingsManager &settings_manager)

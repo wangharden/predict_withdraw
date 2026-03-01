@@ -1,294 +1,374 @@
 #include "msg_queue.h"
+
+#include "spdlog_api.h"
+
+#include <chrono>
 #include <cstring>
-#include <stdexcept>
 
-// ===================== 全局工具函数：深拷贝/释放 TDF_MSG =====================
-// 深拷贝 TDF_MSG 及关联数据（内部辅助函数）
-static TDF_APP_HEAD* copyAppHead(const TDF_APP_HEAD* src) {
-    if (src == nullptr) return nullptr;
-    TDF_APP_HEAD* dst = new (std::nothrow) TDF_APP_HEAD();
-    if (dst) *dst = *src;
-    return dst;
+namespace {
+constexpr int64_t kStatsLogIntervalNs = 2LL * 1000 * 1000 * 1000;
 }
 
-static void* copyDataBody(const TDF_MSG* src) {
-    if (src->pData == nullptr || src->pAppHead == nullptr) return nullptr;
-
-    const TDF_APP_HEAD* pAppHead = src->pAppHead;
-    int itemCount = pAppHead->nItemCount;
-    int itemSize = pAppHead->nItemSize;
-    if (itemCount <= 0 || itemSize <= 0) return nullptr;
-
-    switch (src->nDataType) {
-    case MSG_DATA_MARKET: {
-        TDF_MARKET_DATA* pSrc = static_cast<TDF_MARKET_DATA*>(src->pData);
-        TDF_MARKET_DATA* pDst = new (std::nothrow) TDF_MARKET_DATA[itemCount];
-        if (pDst) memcpy(pDst, pSrc, itemCount * itemSize);
-        return pDst;
-    }
-    case MSG_DATA_ORDER: {
-        TDF_ORDER* pSrc = static_cast<TDF_ORDER*>(src->pData);
-        TDF_ORDER* pDst = new (std::nothrow) TDF_ORDER[itemCount];
-        if (pDst) memcpy(pDst, pSrc, itemCount * itemSize);
-        return pDst;
-    }
-    case MSG_DATA_TRANSACTION: {
-        TDF_TRANSACTION* pSrc = static_cast<TDF_TRANSACTION*>(src->pData);
-        TDF_TRANSACTION* pDst = new (std::nothrow) TDF_TRANSACTION[itemCount];
-        if (pDst) memcpy(pDst, pSrc, itemCount * itemSize);
-        return pDst;
-    }
-    default:
-        return nullptr;
-    }
-}
-
-// 深拷贝 TDF_MSG 及关联数据
-TDF_MSG* deepCopyTDF_MSG(const TDF_MSG* src) {
-    if (src == nullptr) return nullptr;
-
-    TDF_MSG* dst = new (std::nothrow) TDF_MSG();
-    if (!dst) return nullptr;
-
-    // 浅拷贝基础字段
-    *dst = *src;
-    // 深拷贝应用头和数据体
-    dst->pAppHead = copyAppHead(src->pAppHead);
-    dst->pData = copyDataBody(src);
-
-    return dst;
-}
-
-// 释放 TDF_MSG 及关联数据
-void freeTDF_MSG(TDF_MSG* pMsg) {
-    if (pMsg == nullptr) return;
-
-    // 释放应用头
-    if (pMsg->pAppHead) {
-        delete pMsg->pAppHead;
-        pMsg->pAppHead = nullptr;
-    }
-
-    // 释放数据体
-    if (pMsg->pData) {
-        switch (pMsg->nDataType) {
-        case MSG_DATA_MARKET:
-            delete[] static_cast<TDF_MARKET_DATA*>(pMsg->pData);
-            break;
-        case MSG_DATA_ORDER:
-            delete[] static_cast<TDF_ORDER*>(pMsg->pData);
-            break;
-        case MSG_DATA_TRANSACTION:
-            delete[] static_cast<TDF_TRANSACTION*>(pMsg->pData);
-            break;
-        default:
-            break;
-        }
-        pMsg->pData = nullptr;
-    }
-
-    delete pMsg;
-}
-#include <iostream>
-// ===================== TdfMsgData 成员函数实现 =====================
-// 构造函数：深拷贝原始 TDF_MSG 及关联数据（兼容原有接口）
-TdfMsgData::TdfMsgData(THANDLE h, const TDF_MSG* src) : hTdf(h)
+TdfMsgData::TdfMsgData()
 {
-    // 初始化 msg 为空
-    memset(&msg, 0, sizeof(TDF_MSG));
-
-    // 空指针直接返回（不抛异常，避免程序崩溃）
-    if (src == nullptr)
-    {
-        return;
-    }
-
-    // 1. 浅拷贝 TDF_MSG 基础字段
-    msg = *src;
-
-    // 2. 深拷贝关联数据
-    copyMsgData(src);
+    reset();
 }
 
-// 移动构造：转移内存所有权
-TdfMsgData::TdfMsgData(TdfMsgData&& other) noexcept {
+TdfMsgData::TdfMsgData(const TdfMsgData& other)
+{
+    *this = other;
+}
+
+TdfMsgData& TdfMsgData::operator=(const TdfMsgData& other)
+{
+    if (this == &other)
+    {
+        return *this;
+    }
     hTdf = other.hTdf;
     msg = other.msg;
-
-    // 清空原对象，避免重复释放
-    other.hTdf = nullptr;
-    memset(&other.msg, 0, sizeof(TDF_MSG));
-}
-
-// 移动赋值：转移内存所有权
-TdfMsgData& TdfMsgData::operator=(TdfMsgData&& other) noexcept
-{
-    if (this != &other)
-    {
-        // 释放当前对象的内存
-        freeMsgData();
-
-        // 转移所有权
-        hTdf = other.hTdf;
-        msg = other.msg;
-
-        // 清空原对象
-        other.hTdf = nullptr;
-        memset(&other.msg, 0, sizeof(TDF_MSG));
-    }
+    app_head = other.app_head;
+    enqueue_steady_ns = other.enqueue_steady_ns;
+    std::memcpy(payload, other.payload, sizeof(payload));
+    msg.pAppHead = &app_head;
+    msg.pData = payload;
     return *this;
 }
 
-// 析构函数：释放所有深拷贝的内存
-TdfMsgData::~TdfMsgData() {
-    freeMsgData();
+TdfMsgData::TdfMsgData(TdfMsgData&& other) noexcept
+{
+    *this = other;
 }
 
-// 深拷贝 TDF_MSG 关联数据
-void TdfMsgData::copyMsgData(const TDF_MSG* src) {
-    // 深拷贝应用头
-    if (src->pAppHead)
+TdfMsgData& TdfMsgData::operator=(TdfMsgData&& other) noexcept
+{
+    if (this == &other)
     {
-        msg.pAppHead = new (std::nothrow) TDF_APP_HEAD();
-        if (msg.pAppHead)
-        {
-            *msg.pAppHead = *src->pAppHead;
-        }
+        return *this;
     }
-
-    // 深拷贝数据体
-    if (src->pData && src->pAppHead)
-    {
-        const TDF_APP_HEAD* pAppHead = src->pAppHead;
-        int itemCount = pAppHead->nItemCount;
-        int itemSize = pAppHead->nItemSize;
-
-        if (itemCount > 0 && itemSize > 0)
-        {
-            switch (src->nDataType)
-            {
-            case MSG_DATA_MARKET:
-            {
-                TDF_MARKET_DATA* pSrc = static_cast<TDF_MARKET_DATA*>(src->pData);
-                TDF_MARKET_DATA* pDst = new (std::nothrow) TDF_MARKET_DATA[itemCount];
-                if (pDst)
-                {
-                    memcpy(pDst, pSrc, itemCount * itemSize);
-                    msg.pData = pDst;
-                }
-                break;
-            }
-            case MSG_DATA_ORDER:
-            {
-                TDF_ORDER* pSrc = static_cast<TDF_ORDER*>(src->pData);
-                TDF_ORDER* pDst = new (std::nothrow) TDF_ORDER[itemCount];
-                if (pDst)
-                {
-                    memcpy(pDst, pSrc, itemCount * itemSize);
-                    msg.pData = pDst;
-                }
-                break;
-            }
-            case MSG_DATA_TRANSACTION:
-            {
-                TDF_TRANSACTION* pSrc = static_cast<TDF_TRANSACTION*>(src->pData);
-                TDF_TRANSACTION* pDst = new (std::nothrow) TDF_TRANSACTION[itemCount];
-                if (pDst) {
-                    memcpy(pDst, pSrc, itemCount * itemSize);
-                    msg.pData = pDst;
-                }
-                break;
-            }
-            default:
-                msg.pData = nullptr;
-                break;
-            }
-        }
-    }
+    return (*this = static_cast<const TdfMsgData&>(other));
 }
 
-// 释放 TDF_MSG 关联数据
-void TdfMsgData::freeMsgData() {
-    // 释放应用头
-    if (msg.pAppHead) {
-        delete msg.pAppHead;
-        msg.pAppHead = nullptr;
-    }
-
-    // 释放数据体
-    if (msg.pData) {
-        switch (msg.nDataType) {
-        case MSG_DATA_MARKET:
-            delete[] static_cast<TDF_MARKET_DATA*>(msg.pData);
-            break;
-        case MSG_DATA_ORDER:
-            delete[] static_cast<TDF_ORDER*>(msg.pData);
-            break;
-        case MSG_DATA_TRANSACTION:
-            delete[] static_cast<TDF_TRANSACTION*>(msg.pData);
-            break;
-        default:
-            break;
-        }
-        msg.pData = nullptr;
-    }
-
-    // 清空基础字段
-    memset(&msg, 0, sizeof(TDF_MSG));
+void TdfMsgData::reset()
+{
     hTdf = nullptr;
+    std::memset(&msg, 0, sizeof(msg));
+    std::memset(&app_head, 0, sizeof(app_head));
+    enqueue_steady_ns = 0;
+    msg.pAppHead = &app_head;
+    msg.pData = payload;
 }
 
-// ===================== MsgQueue 成员函数实现 =====================
-// 入队：接收原始 TDF_MSG 指针，内部完成深拷贝
-void MsgQueue::push(THANDLE hTdf, const TDF_MSG* pMsgHead) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+MsgQueue::MsgQueue()
+    : m_ring(kCapacity)
+    , m_read_index(0)
+    , m_write_index(0)
+    , m_isStopped(false)
+    , m_last_stats_log_ns(0)
+{
+}
 
-    // 队列已停止或空指针，直接返回
-    if (m_isStopped || pMsgHead == nullptr) {
+int64_t MsgQueue::steady_now_ns()
+{
+    using namespace std::chrono;
+    return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+void MsgQueue::update_max(std::atomic<uint64_t>& holder, uint64_t value)
+{
+    uint64_t old_value = holder.load(std::memory_order_relaxed);
+    while (value > old_value &&
+           !holder.compare_exchange_weak(old_value, value, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+}
+
+void MsgQueue::sanitize_payload_pointers(int dataType, void* payload, int payload_len)
+{
+    if (!payload || payload_len <= 0)
+    {
         return;
     }
 
-    try {
-        // 构造 TdfMsgData（自动深拷贝），移动入队
-        m_queue.emplace(hTdf, pMsgHead);
-        m_cv.notify_one(); // 通知处理线程有新数据
-    } catch (const std::exception& e) {
-        // 静默处理异常，避免程序崩溃
-        (void)e;
-    } catch (...) {}
-}
-
-// 出队：阻塞直到有数据/队列停止
-bool MsgQueue::pop(TdfMsgData& data) {
-    std::unique_lock<std::mutex> lock(m_mutex);
-
-    // 阻塞等待：有数据 或 队列停止
-    m_cv.wait(lock, [this]() {
-        return !m_queue.empty() || m_isStopped;
-    });
-
-    // 队列停止且无数据，返回false
-    if (m_isStopped && m_queue.empty()) {
-        return false;
+    if (dataType == MSG_DATA_ORDER)
+    {
+        if (payload_len >= static_cast<int>(sizeof(TDF_ORDER)))
+        {
+            static_cast<TDF_ORDER*>(payload)->pCodeInfo = nullptr;
+        }
+        return;
     }
 
-    // 移动语义取出数据（兼容原有接口）
-    data = std::move(m_queue.front());
-    m_queue.pop();
+    if (dataType == MSG_DATA_TRANSACTION)
+    {
+        if (payload_len >= static_cast<int>(sizeof(TDF_TRANSACTION)))
+        {
+            static_cast<TDF_TRANSACTION*>(payload)->pCodeInfo = nullptr;
+        }
+        return;
+    }
 
-    return true;
+    if (dataType == MSG_DATA_MARKET)
+    {
+        if (payload_len >= static_cast<int>(sizeof(TDF_MARKET_DATA)))
+        {
+            static_cast<TDF_MARKET_DATA*>(payload)->pCodeInfo = nullptr;
+        }
+        return;
+    }
 }
 
-// 停止队列
-void MsgQueue::stop() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_isStopped = true;
-    m_cv.notify_all(); // 唤醒所有阻塞的pop线程
+bool MsgQueue::has_data() const
+{
+    const uint64_t read = m_read_index.load(std::memory_order_relaxed);
+    const uint64_t write = m_write_index.load(std::memory_order_acquire);
+    return read != write;
 }
 
-// 清空队列（释放所有未处理数据）
-void MsgQueue::clear() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    std::queue<TdfMsgData> emptyQueue;
-    std::swap(m_queue, emptyQueue); // 清空原队列，自动释放数据
+void MsgQueue::add_drop_stat(int dataType, uint64_t dropped_count)
+{
+    if (dropped_count == 0)
+    {
+        return;
+    }
+    if (dataType == MSG_DATA_MARKET)
+    {
+        m_stats.dropped_market.fetch_add(dropped_count, std::memory_order_relaxed);
+        return;
+    }
+    if (dataType == MSG_DATA_ORDER)
+    {
+        const uint64_t total = m_stats.dropped_order.fetch_add(dropped_count, std::memory_order_relaxed) + dropped_count;
+        if (s_spLogger && (total % 100 == 0))
+        {
+            s_spLogger->warn("[MSG_QUEUE_DROP] type=ORDER total={} last_batch={}", total, dropped_count);
+        }
+        return;
+    }
+    if (dataType == MSG_DATA_TRANSACTION)
+    {
+        const uint64_t total = m_stats.dropped_transaction.fetch_add(dropped_count, std::memory_order_relaxed) + dropped_count;
+        if (s_spLogger && (total % 100 == 0))
+        {
+            s_spLogger->warn("[MSG_QUEUE_DROP] type=TRANSACTION total={} last_batch={}", total, dropped_count);
+        }
+        return;
+    }
+}
+
+void MsgQueue::maybe_log_stats(int64_t now_ns)
+{
+    const int64_t last_ns = m_last_stats_log_ns.load(std::memory_order_relaxed);
+    if (last_ns > 0 && now_ns - last_ns < kStatsLogIntervalNs)
+    {
+        return;
+    }
+
+    int64_t expected = last_ns;
+    if (!m_last_stats_log_ns.compare_exchange_strong(expected, now_ns, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+        return;
+    }
+
+    if (!s_spLogger)
+    {
+        return;
+    }
+
+    const uint64_t read = m_read_index.load(std::memory_order_relaxed);
+    const uint64_t write = m_write_index.load(std::memory_order_acquire);
+    const uint64_t depth = write - read;
+    s_spLogger->info("[MSG_QUEUE_STATS] depth={} max_depth={} dropped_market={} dropped_order={} dropped_transaction={} filtered={} max_enqueue_ns={} max_queue_delay_ns={}",
+                     static_cast<unsigned long long>(depth),
+                     static_cast<unsigned long long>(m_stats.max_depth.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(m_stats.dropped_market.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(m_stats.dropped_order.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(m_stats.dropped_transaction.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(m_filtered_count.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(m_stats.max_callback_enqueue_ns.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(m_stats.max_queue_delay_ns.load(std::memory_order_relaxed)));
+}
+
+void MsgQueue::setWhitelist(const std::vector<std::string>& codes)
+{
+    m_whitelist.clear();
+    m_whitelist.reserve(codes.size());
+    for (const auto& code : codes)
+    {
+        if (!code.empty())
+        {
+            m_whitelist.insert(code);
+        }
+    }
+    m_filterEnabled = !m_whitelist.empty();
+    if (s_spLogger)
+    {
+        s_spLogger->info("[MSG_QUEUE] whitelist set: {} codes, filter_enabled={}",
+                         m_whitelist.size(), m_filterEnabled ? 1 : 0);
+    }
+}
+
+bool MsgQueue::isWhitelisted(const char* szWindCode) const
+{
+    // szWindCode 是 char[32]，SSO 下 std::string 构造无堆分配（长度 < 22）
+    return m_whitelist.count(std::string(szWindCode)) > 0;
+}
+
+void MsgQueue::push(THANDLE hTdf, const TDF_MSG* pMsgHead)
+{
+    if (m_isStopped.load(std::memory_order_acquire) || pMsgHead == nullptr)
+    {
+        return;
+    }
+
+    const int data_type = pMsgHead->nDataType;
+    if (data_type != MSG_DATA_MARKET &&
+        data_type != MSG_DATA_ORDER &&
+        data_type != MSG_DATA_TRANSACTION)
+    {
+        return;
+    }
+
+    if (pMsgHead->pAppHead == nullptr || pMsgHead->pData == nullptr)
+    {
+        return;
+    }
+
+    const TDF_APP_HEAD* p_app_head = pMsgHead->pAppHead;
+    const int item_count = p_app_head->nItemCount;
+    const int item_size = p_app_head->nItemSize;
+    if (item_count <= 0 || item_size <= 0)
+    {
+        return;
+    }
+
+    if (item_size > static_cast<int>(TdfMsgData::kPayloadBytes))
+    {
+        add_drop_stat(data_type, static_cast<uint64_t>(item_count));
+        if (s_spLogger)
+        {
+            s_spLogger->error("[MSG_QUEUE_DROP_OVERSIZE] type={} item_size={} max_payload={}",
+                              data_type,
+                              item_size,
+                              static_cast<int>(TdfMsgData::kPayloadBytes));
+        }
+        return;
+    }
+
+    const int64_t enqueue_begin_ns = steady_now_ns();
+    const uint64_t write = m_write_index.load(std::memory_order_relaxed);
+    const uint64_t read = m_read_index.load(std::memory_order_acquire);
+    const uint64_t used = write - read;
+
+    // 白名单过滤：逐 item 检查 szWindCode，只入队匹配的记录
+    // TDF_ORDER / TDF_TRANSACTION / TDF_MARKET_DATA 的前 32 字节都是 szWindCode
+    const unsigned char* src_data = static_cast<const unsigned char*>(pMsgHead->pData);
+    uint64_t actual_written = 0;
+
+    for (int i = 0; i < item_count; ++i)
+    {
+        const unsigned char* item_ptr = src_data + static_cast<size_t>(i) * static_cast<size_t>(item_size);
+
+        // 源头过滤：非白名单股票直接跳过，不做任何拷贝
+        if (m_filterEnabled)
+        {
+            const char* windCode = reinterpret_cast<const char*>(item_ptr);
+            if (!isWhitelisted(windCode))
+            {
+                m_filtered_count.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+        }
+
+        // 容量检查（逐条检查，因为过滤后实际入队量远小于 item_count）
+        if (used + actual_written >= kCapacity)
+        {
+            add_drop_stat(data_type, 1);
+            continue;
+        }
+
+        TdfMsgData& slot = m_ring[(write + actual_written) & kMask];
+        slot.reset();
+        slot.hTdf = hTdf;
+        slot.msg.sFlags = pMsgHead->sFlags;
+        slot.msg.nDataType = data_type;
+        slot.msg.nDataLen = item_size;
+        slot.msg.nServerTime = pMsgHead->nServerTime;
+        slot.msg.nOrder = pMsgHead->nOrder;
+        slot.msg.nConnectId = pMsgHead->nConnectId;
+        slot.app_head.nHeadSize = sizeof(TDF_APP_HEAD);
+        slot.app_head.nItemCount = 1;
+        slot.app_head.nItemSize = item_size;
+        slot.enqueue_steady_ns = enqueue_begin_ns;
+
+        std::memcpy(slot.payload, item_ptr, static_cast<size_t>(item_size));
+        sanitize_payload_pointers(data_type, slot.payload, item_size);
+        ++actual_written;
+    }
+
+    if (actual_written == 0)
+    {
+        return;
+    }
+
+    m_write_index.store(write + actual_written, std::memory_order_release);
+    update_max(m_stats.max_depth, used + actual_written);
+
+    const int64_t enqueue_end_ns = steady_now_ns();
+    if (enqueue_end_ns > enqueue_begin_ns)
+    {
+        update_max(m_stats.max_callback_enqueue_ns, static_cast<uint64_t>(enqueue_end_ns - enqueue_begin_ns));
+    }
+
+    m_cv.notify_one();
+    maybe_log_stats(enqueue_end_ns);
+}
+
+bool MsgQueue::pop(TdfMsgData& data)
+{
+    for (;;)
+    {
+        const uint64_t read = m_read_index.load(std::memory_order_relaxed);
+        const uint64_t write = m_write_index.load(std::memory_order_acquire);
+        if (read != write)
+        {
+            data = m_ring[read & kMask];
+            m_read_index.store(read + 1, std::memory_order_release);
+
+            const int64_t now_ns = steady_now_ns();
+            if (data.enqueue_steady_ns > 0 && now_ns >= data.enqueue_steady_ns)
+            {
+                update_max(m_stats.max_queue_delay_ns, static_cast<uint64_t>(now_ns - data.enqueue_steady_ns));
+            }
+            maybe_log_stats(now_ns);
+            return true;
+        }
+
+        if (m_isStopped.load(std::memory_order_acquire))
+        {
+            return false;
+        }
+
+        std::unique_lock<std::mutex> lock(m_wait_mutex);
+        m_cv.wait_for(lock, std::chrono::milliseconds(50), [this]() {
+            return m_isStopped.load(std::memory_order_acquire) || has_data();
+        });
+
+        if (m_isStopped.load(std::memory_order_acquire) && !has_data())
+        {
+            return false;
+        }
+    }
+}
+
+void MsgQueue::stop()
+{
+    m_isStopped.store(true, std::memory_order_release);
+    m_cv.notify_all();
+}
+
+void MsgQueue::clear()
+{
+    const uint64_t write = m_write_index.load(std::memory_order_acquire);
+    m_read_index.store(write, std::memory_order_release);
 }

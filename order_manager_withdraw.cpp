@@ -11,9 +11,18 @@ namespace {
 constexpr int64_t kCancelAckRetryTimeoutNs = 2LL * 1000 * 1000 * 1000; // 2s
 constexpr int kWorkerWakeupMs = 100;
 constexpr int kMaxCancelRetryAttempts = 3; // 与 INVALID 重试上限保持一致
+
+long long diff_ns_or_neg1(int64_t end_ns, int64_t begin_ns)
+{
+    if (end_ns <= 0 || begin_ns <= 0 || end_ns < begin_ns)
+    {
+        return -1;
+    }
+    return static_cast<long long>(end_ns - begin_ns);
+}
 }
 
-OrderManagerWithdraw * orderManagerWithdraw = OrderManagerWithdraw::get_order_manager_withdraw();
+OrderManagerWithdraw * orderManagerWithdraw = nullptr;
 
 OrderManagerWithdraw::OrderManagerWithdraw() : m_isRunning(false)
 {
@@ -353,6 +362,7 @@ void OrderManagerWithdraw::handle_limitup_trigger(const LimitUpTrigger& trigger)
     {
         return;
     }
+    const int64_t worker_dequeue_ns = steady_now_ns();
     // limitup_raw 已在post侧校验，这里留作兜底保护
     if (trigger.limitup_raw <= 0)
     {
@@ -408,11 +418,13 @@ void OrderManagerWithdraw::handle_limitup_trigger(const LimitUpTrigger& trigger)
         }
         st.trigger_nTime = trigger.event_time;
         st.signal_steady_ns = trigger.signal_steady_ns;
+        st.worker_dequeue_ns = worker_dequeue_ns;
         st.limitup_raw = trigger.limitup_raw;
         st.base_raw = trigger.base_raw;
         st.tick_raw = trigger.tick_raw;
         st.trigger_count_50w = trigger.trigger_count_50w;
         st.send_steady_ns = 0;
+        st.new_ack_ns = 0;
         st.pending_sys_id = 0;
         st.to_cancel_sys_id = 0;
         st.cancel_attempts = 0;
@@ -694,6 +706,7 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
             prev_active = st.active_sys_id;
 
             st.active_sys_id = st.pending_sys_id;
+            st.new_ack_ns = now_ns;
             st.pending_sys_id = 0;
 
             if (prev_active > 0)
@@ -747,11 +760,124 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
         return;
     }
 
+    if (nType == NOTIFY_PUSH_MATCH)
+    {
+        uint32_t seq = 0;
+        int64_t target = 0;
+        int64_t active = 0;
+        std::string reason;
+        int trigger_nTime = 0;
+        int64_t signal_ns = 0;
+        int64_t worker_dequeue_ns = 0;
+        int64_t send_ns = 0;
+        int64_t new_ack_ns = 0;
+        int64_t cancel_send_ns = 0;
+        const int64_t oid = stMsg.OrderId;
+        const int64_t cx_oid = stMsg.CXOrderId;
+        const int64_t order_qty = stMsg.OrderQty;
+        const int64_t total_match_qty = stMsg.TotalMatchQty;
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            auto it = limitup_states_.find(symbol);
+            if (it == limitup_states_.end())
+            {
+                return;
+            }
+            LimitUpOrderState& st = it->second;
+            if (st.phase != LimitUpOrderState::WAIT_CANCEL_ACK || st.to_cancel_sys_id <= 0)
+            {
+                return;
+            }
+            if (oid != st.to_cancel_sys_id && cx_oid != st.to_cancel_sys_id)
+            {
+                return;
+            }
+            if (order_qty <= 0 || total_match_qty < order_qty)
+            {
+                return;
+            }
+
+            seq = st.seq;
+            target = st.to_cancel_sys_id;
+            active = st.active_sys_id;
+            reason = st.reason;
+            trigger_nTime = st.trigger_nTime;
+            signal_ns = st.signal_steady_ns;
+            worker_dequeue_ns = st.worker_dequeue_ns;
+            send_ns = st.send_steady_ns;
+            new_ack_ns = st.new_ack_ns;
+            cancel_send_ns = st.last_cancel_send_ns;
+
+            st.pending_sys_id = 0;
+            st.to_cancel_sys_id = 0;
+            st.active_sys_id = 0;
+            st.cancel_attempts = 0;
+            st.last_cancel_send_ns = 0;
+            st.stop_after_done = true;
+            st.phase = LimitUpOrderState::STOPPED;
+        }
+
+        if (s_spLogger)
+        {
+            s_spLogger->warn("[LUP_FILL_TO_CANCEL_STOP] code={} seq={} to_cancel_sys_id={} active_sys_id={} order_qty={} total_match_qty={} confirm_time={} pTime={}",
+                             symbol,
+                             seq,
+                             static_cast<long long>(target),
+                             static_cast<long long>(active),
+                             static_cast<long long>(order_qty),
+                             static_cast<long long>(total_match_qty),
+                             confirm_s,
+                             pTime_s);
+            s_spLogger->flush();
+        }
+
+        char line[640];
+        std::snprintf(line,
+                      sizeof(line),
+                      "v2,MATCH_FILL_STOP,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%lld",
+                      symbol.c_str(),
+                      seq,
+                      static_cast<long long>(target),
+                      static_cast<long long>(active),
+                      static_cast<long long>(order_qty),
+                      static_cast<long long>(total_match_qty),
+                      pTime_s,
+                      confirm_s,
+                      static_cast<long long>(now_ns));
+        time_spend_write_line(line);
+
+        char cycle_line[768];
+        std::snprintf(cycle_line,
+                      sizeof(cycle_line),
+                      "v2,CYCLE_STOP_FILL,%s,%u,%s,%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld",
+                      symbol.c_str(),
+                      seq,
+                      reason.c_str(),
+                      trigger_nTime,
+                      diff_ns_or_neg1(worker_dequeue_ns, signal_ns),
+                      diff_ns_or_neg1(send_ns, signal_ns),
+                      diff_ns_or_neg1(new_ack_ns, send_ns),
+                      diff_ns_or_neg1(cancel_send_ns, new_ack_ns),
+                      diff_ns_or_neg1(now_ns, cancel_send_ns),
+                      diff_ns_or_neg1(now_ns, signal_ns),
+                      static_cast<long long>(target));
+        time_spend_write_line(cycle_line);
+        return;
+    }
+
     // ====== 撤单确认 ======
     if (nType == NOTIFY_PUSH_WITHDRAW)
     {
         uint32_t seq = 0;
         int64_t target = 0;
+        std::string reason;
+        int trigger_nTime = 0;
+        int64_t signal_ns = 0;
+        int64_t worker_dequeue_ns = 0;
+        int64_t send_ns = 0;
+        int64_t new_ack_ns = 0;
+        int64_t cancel_send_ns = 0;
         const int64_t oid = stMsg.OrderId;
         const int64_t cx_oid = stMsg.CXOrderId;
 
@@ -773,6 +899,13 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
             }
             seq = st.seq;
             target = st.to_cancel_sys_id;
+            reason = st.reason;
+            trigger_nTime = st.trigger_nTime;
+            signal_ns = st.signal_steady_ns;
+            worker_dequeue_ns = st.worker_dequeue_ns;
+            send_ns = st.send_steady_ns;
+            new_ack_ns = st.new_ack_ns;
+            cancel_send_ns = st.last_cancel_send_ns;
 
             st.to_cancel_sys_id = 0;
             st.cancel_attempts = 0;
@@ -804,6 +937,23 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
                       stMsg.OrderStatus,
                       result_s);
         time_spend_write_line(line);
+
+        char cycle_line[768];
+        std::snprintf(cycle_line,
+                      sizeof(cycle_line),
+                      "v2,CYCLE_DONE,%s,%u,%s,%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld",
+                      symbol.c_str(),
+                      seq,
+                      reason.c_str(),
+                      trigger_nTime,
+                      diff_ns_or_neg1(worker_dequeue_ns, signal_ns),
+                      diff_ns_or_neg1(send_ns, signal_ns),
+                      diff_ns_or_neg1(new_ack_ns, send_ns),
+                      diff_ns_or_neg1(cancel_send_ns, new_ack_ns),
+                      diff_ns_or_neg1(now_ns, cancel_send_ns),
+                      diff_ns_or_neg1(now_ns, signal_ns),
+                      static_cast<long long>(target));
+        time_spend_write_line(cycle_line);
         return;
     }
 

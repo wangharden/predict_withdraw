@@ -28,11 +28,27 @@ StockDataManager::StockDataManager(const StockCode& stockCode)
     , m_flagOrderInitialized(false)
     , m_flagOrder(0)
     , m_sumAmountRaw(0)
+    , m_pendingFlagOrderUpdate(false)
+    , m_pendingEventTime(0)
+    , m_pendingLimitupRaw(0)
+    , m_pendingSeq(0)
     , m_triggerCount50w(0)
     , m_basePriceRaw(0)
     , m_basePriceReady(false)
     , m_price107Triggered(false)
 {}
+
+void StockDataManager::setLimitUpPrice(double price)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_limitUpPrice = price;
+}
+
+double StockDataManager::getLimitUpPrice() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_limitUpPrice;
+}
 
 bool StockDataManager::isSHMarket() const
 {
@@ -62,24 +78,27 @@ bool StockDataManager::isLimitUpRawPrice(int64_t rawPrice) const
 void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eventTime, const char* reason)
 {
     OrderIdType oldFlagOrder = m_flagOrder;
-    
 
-    m_flagOrder = currentOrderId;
-    m_sumAmountRaw = 0; // 按需求：sum刷新用sum=0
+    m_pendingFlagOrderUpdate = true;
+    m_pendingEventTime = eventTime;
+    m_pendingLimitupRaw = getLimitUpPriceRaw();
     ++m_triggerCount50w;
+    m_pendingSeq = m_triggerCount50w;
+    m_sumAmountRaw = 0;
     // 设计约束：一旦已被“50万阈值”触发启动，则不再需要/不再检查 1.07 触发
     m_price107Triggered = true;
 
     if (s_spLogger)
     {
-        s_spLogger->info("[LIMITUP_SELL_50W] code={} time={} reason={} flag_order_old={} flag_order_new={} trigger={}",
+        s_spLogger->info("[LIMITUP_SELL_50W] code={} time={} reason={} flag_order_old={} candidate_order={} pending={} trigger={} pending_limitup_raw={}",
             m_stockCode,
             eventTime,
             reason ? reason : "",
             static_cast<unsigned long long>(oldFlagOrder),
-            static_cast<unsigned long long>(m_flagOrder),
-
-            m_triggerCount50w);
+            static_cast<unsigned long long>(currentOrderId),
+            m_pendingFlagOrderUpdate ? 1 : 0,
+            m_triggerCount50w,
+            static_cast<long long>(m_pendingLimitupRaw));
     }
     else
     {
@@ -87,7 +106,8 @@ void StockDataManager::onSellSumThresholdHit(OrderIdType currentOrderId, int eve
                   << " time=" << eventTime
                   << " reason=" << (reason ? reason : "")
                   << " flag_order_old=" << oldFlagOrder
-                  << " flag_order_new=" << m_flagOrder
+                  << " candidate_order=" << currentOrderId
+                  << " pending=" << (m_pendingFlagOrderUpdate ? 1 : 0)
                   << " trigger=" << m_triggerCount50w
                   << std::endl;
     }
@@ -161,6 +181,39 @@ void StockDataManager::processOrder(const TDF_ORDER& order)
 
     if (orderId <= m_flagOrder)
     {
+        return;
+    }
+
+    if (m_pendingFlagOrderUpdate)
+    {
+        const bool isMatchOrder = (!isShCancel) &&
+                                  (order.nVolume == 100) &&
+                                  isLimitUpRawPrice(order.nPrice);
+        if (isMatchOrder)
+        {
+            const OrderIdType oldFlag = m_flagOrder;
+            m_flagOrder = orderId;
+            m_pendingFlagOrderUpdate = false;
+            m_pendingEventTime = 0;
+            m_pendingLimitupRaw = 0;
+            m_pendingSeq = 0;
+            if (s_spLogger)
+            {
+                s_spLogger->info("[LIMITUP_FLAG_UPDATE] code={} flag_order_old={} flag_order_new={} match_time={}",
+                                 m_stockCode,
+                                 static_cast<unsigned long long>(oldFlag),
+                                 static_cast<unsigned long long>(m_flagOrder),
+                                 order.nTime);
+            }
+            else
+            {
+                std::cout << "[LIMITUP_FLAG_UPDATE] code=" << m_stockCode
+                          << " flag_order_old=" << oldFlag
+                          << " flag_order_new=" << m_flagOrder
+                          << " match_time=" << order.nTime
+                          << std::endl;
+            }
+        }
         return;
     }
 
@@ -293,6 +346,11 @@ void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
 
     const OrderIdType askOrder = (trans.nAskOrder > 0) ? static_cast<OrderIdType>(trans.nAskOrder) : 0;
     if (askOrder == 0 || askOrder <= m_flagOrder)
+    {
+        return;
+    }
+
+    if (m_pendingFlagOrderUpdate)
     {
         return;
     }
@@ -440,6 +498,10 @@ void StockDataManager::reset()
     m_flagOrderInitialized = false;
     m_flagOrder = 0;
     m_sumAmountRaw = 0;
+    m_pendingFlagOrderUpdate = false;
+    m_pendingEventTime = 0;
+    m_pendingLimitupRaw = 0;
+    m_pendingSeq = 0;
     m_triggerCount50w = 0;
     m_basePriceRaw = 0;
     m_basePriceReady = false;

@@ -18,6 +18,12 @@ StockDataManagerFactory& StockDataManagerFactory::getInstance() {
 }
 
 StockDataManager* StockDataManagerFactory::getStockManager(const StockCode& stockCode) {
+    if (m_readOnlyAfterInit.load(std::memory_order_acquire))
+    {
+        auto it = m_stockManagerMap.find(stockCode);
+        return (it != m_stockManagerMap.end()) ? it->second.get() : nullptr;
+    }
+
     std::lock_guard<std::mutex> lock(m_mutex);
 
     auto it = m_stockManagerMap.find(stockCode);
@@ -50,15 +56,24 @@ void StockDataManagerFactory::resetAll() {
 }
 
 void StockDataManagerFactory::removeStockManager(const StockCode& stockCode) {
+    if (m_readOnlyAfterInit.load(std::memory_order_acquire))
+    {
+        return;
+    }
     std::lock_guard<std::mutex> lock(m_mutex);
     m_stockManagerMap.erase(stockCode);
 }
 
 bool StockDataManagerFactory::init_factory(const std::vector<std::string>& stock_codes)
 {
+    m_readOnlyAfterInit.store(false, std::memory_order_release);
     for(const auto & stock_code:stock_codes)
     {
         getStockManager(stock_code);
+    }
+    if (!stock_codes.empty())
+    {
+        m_readOnlyAfterInit.store(true, std::memory_order_release);
     }
     return true;
 }
@@ -141,14 +156,13 @@ bool StockDataManagerFactory::updateLimitupPrice(const std::string & sKhh)
         if (it != m_stockManagerMap.end())
         {
             std::cout<< stockCodeKey << " HighLimitPrice:" << zqdmRecord.HighLimitPrice <<std::endl;
-            s_spLogger->info("通过查询的涨停价更新成功 {},原先价格 {},新价格 {}.", stockCodeKey,it->second->m_limitUpPrice,zqdmRecord.HighLimitPrice);
+            s_spLogger->info("通过查询的涨停价更新成功 {},原先价格 {},新价格 {}.", stockCodeKey,it->second->getLimitUpPrice(),zqdmRecord.HighLimitPrice);
             s_spLogger->flush();
-            it->second->m_limitUpPrice = zqdmRecord.HighLimitPrice;
+            it->second->setLimitUpPrice(zqdmRecord.HighLimitPrice);
             count_updated++;
         }
     }
     s_spLogger->info("涨停价更新结束,共有待更新白名单股票:{}个,已更新:{}个,查询服务器总共返回查询:{}个.", m_stockManagerMap.size(),count_updated,arZQDM.size());
     s_spLogger->flush();
-    return true;
     return count_updated == m_stockManagerMap.size();
 }

@@ -1,17 +1,27 @@
-# 编译产物
+# ── 编译产物 ──
+build/
 *.exe
 *.o
 *.a
 *.so
+*.lib
 file_manager
 
-# 行情测试目录（原doc/，整体忽略）
-行情测试/
+# CMake / Qt Creator 用户文件
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
 
-# 日志
+# ── 日志 & 运行时产物 ──
 log/
 server_logs/
-
-# 离线耗时分析
+logs_probe/
 time_spend.log
-server_logs/
+# TDF / SECITPDK SDK 运行日志（TDFAPI3_*, secitpdk-*.log）
+TDFAPI3_*
+secitpdk-*.log
+# 根目录散落的行情日志快照
+server_buy_withdraw_log_*
+
+# ── 测试 / 临时 ──
+行情测试/

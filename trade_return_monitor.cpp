@@ -42,6 +42,10 @@ TradeReturnMonitor::TradeReturnMonitor(const SettingsManager& settings_manager) 
         }
     }
 
+    if (!watch_codes_.empty()) {
+        filter_by_whitelist_ = true;
+    }
+
     recorded_by_stock_.reserve(watch_codes_.empty() ? 1024u : watch_codes_.size());
     recorded_order_ids_.reserve(watch_codes_.empty() ? 1024u : watch_codes_.size());
     printed_keys_.reserve(4096);

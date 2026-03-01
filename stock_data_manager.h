@@ -57,9 +57,12 @@ public:
     bool isLimitUp() const { std::lock_guard<std::mutex> lock(m_mutex); return m_isLimitUp; }
 
 public:
-    double m_limitUpPrice;                // 涨停价
+    void setLimitUpPrice(double price);
+    double getLimitUpPrice() const;
 
 private:
+    double m_limitUpPrice;                // 涨停价
+
     bool isSHMarket() const;
     bool isSZMarket() const;
     int64_t getLimitUpPriceRaw() const;
@@ -77,6 +80,10 @@ private:
     bool m_flagOrderInitialized;          // 卖侧flag_order是否已初始化
     OrderIdType m_flagOrder;              // 卖侧基准委托号
     int64_t m_sumAmountRaw;               // 卖侧累计金额（raw: price_raw*volume）
+    bool m_pendingFlagOrderUpdate;        // pending flag-order update until 100-share match
+    int m_pendingEventTime;               // pending event nTime
+    int64_t m_pendingLimitupRaw;          // pending limit-up raw
+    int m_pendingSeq;                     // pending sequence
     int m_triggerCount50w;                // 50万阈值触发次数
     int64_t m_basePriceRaw;               // 基准价 raw(*10000)，由快照涨停价倒推
     bool m_basePriceReady;                // 基准价是否就绪

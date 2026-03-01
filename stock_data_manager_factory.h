@@ -6,6 +6,7 @@
 #include <mutex>
 #include <memory>
 #include <vector>
+#include <atomic>
 
 // 前置声明
 class StockDataManager;
@@ -42,6 +43,7 @@ private:
 
     std::unordered_map<StockCode, std::unique_ptr<StockDataManager>> m_stockManagerMap;
     std::mutex m_mutex; // 实例映射表锁
+    std::atomic<bool> m_readOnlyAfterInit{false};
 };
 
 #endif // STOCK_DATA_MANAGER_FACTORY_H

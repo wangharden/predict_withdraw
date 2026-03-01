@@ -130,7 +130,9 @@ private:
         std::string reason;
         int trigger_nTime = 0;
         int64_t signal_steady_ns = 0;
+        int64_t worker_dequeue_ns = 0;
         int64_t send_steady_ns = 0;
+        int64_t new_ack_ns = 0;
         int64_t limitup_raw = 0;
         int64_t base_raw = 0;
         int64_t tick_raw = 0;

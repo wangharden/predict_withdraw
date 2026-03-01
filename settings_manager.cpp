@@ -126,9 +126,10 @@ std::string SettingsManager::get_codes_string() const
 {
     std::string stock_codes_string;
     stock_codes_string.reserve(stock_codes.size() * 10);
-    for (const auto& stock_code : stock_codes)
+    for (size_t i = 0; i < stock_codes.size(); ++i)
     {
-        stock_codes_string += ";" + stock_code;
+        if (i > 0) stock_codes_string += ';';
+        stock_codes_string += stock_codes[i];
     }
     return stock_codes_string;
 }

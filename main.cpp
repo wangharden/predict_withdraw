@@ -1,11 +1,13 @@
 #include <thread>
 #include "market_data_api.h"
+#include "msg_queue.h"
 #include "spdlog_api.h"
 #include "settings_manager.h"
 #include "market_data_processor.h"
 #include "stock_data_manager_factory.h"
 #include "trader_api.h"
 #include "trade_return_monitor.h"
+#include "order_manager_withdraw.h"
 
 int main(int argc, char*argv[])
 {
@@ -15,6 +17,9 @@ int main(int argc, char*argv[])
         std::string logger_file_name_prefix = "server_logs/server_buy_withdraw_log";
         create_logger(logger_name,logger_file_name_prefix);
     }
+
+    // 延迟初始化 orderManagerWithdraw（全局指针），确保 s_spLogger 已就绪
+    orderManagerWithdraw = OrderManagerWithdraw::get_order_manager_withdraw();
 
     SettingsManager settings_manager;
     if(false == settings_manager.load_account_settings("account.ini"))
@@ -58,6 +63,9 @@ int main(int argc, char*argv[])
         std::cerr << "涨停价 更新 失败" << std::endl;
         return 0;
     }
+
+    // 源头过滤：白名单非空时，MsgQueue 只入队白名单股票的行情数据
+    MsgQueue::getInstance().setWhitelist(settings_manager.get_codes_vector());
 
     MarketDataApi market_data_api;
     MarketDataProcessor market_data_processor;

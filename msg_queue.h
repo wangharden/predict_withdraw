@@ -1,87 +1,98 @@
 #ifndef MSG_QUEUE_H
 #define MSG_QUEUE_H
 
-#include <queue>
-#include <mutex>
+#include <atomic>
 #include <condition_variable>
-#include <utility>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 #include "TDFAPI.h"
 #include "TDCore.h"
 #include "TDFAPIInner.h"
 #include "TDNonMarketStruct.h"
 
-// 深拷贝/释放 TDF_MSG 的函数声明
-TDF_MSG* deepCopyTDF_MSG(const TDF_MSG* src);
-void freeTDF_MSG(TDF_MSG* pMsg);
-
-// 封装带所有权的 TDF_MSG 数据（兼容原有处理接口）
 struct TdfMsgData {
-    THANDLE hTdf;          // TDF句柄
-    TDF_MSG msg;           // 拷贝后的 TDF_MSG（非指针，兼容原有接口）
+    static const size_t kPayloadBytes = 1024;
 
-    // 构造函数：接收原始 TDF_MSG 指针，内部完成深拷贝
-    TdfMsgData(THANDLE h, const TDF_MSG* src);
-
-    // 移动构造：转移内存所有权，避免重复拷贝
+    TdfMsgData();
+    TdfMsgData(const TdfMsgData& other);
+    TdfMsgData& operator=(const TdfMsgData& other);
     TdfMsgData(TdfMsgData&& other) noexcept;
-
-    // 移动赋值：转移内存所有权
     TdfMsgData& operator=(TdfMsgData&& other) noexcept;
 
-    // 禁用拷贝构造/赋值（防止浅拷贝导致重复释放）
-    TdfMsgData(const TdfMsgData&) = delete;
-    TdfMsgData& operator=(const TdfMsgData&) = delete;
+    THANDLE hTdf;
+    TDF_MSG msg;
+    TDF_APP_HEAD app_head;
+    int64_t enqueue_steady_ns;
+    alignas(16) unsigned char payload[kPayloadBytes];
 
-    // 析构函数：自动释放所有深拷贝的内存
-    ~TdfMsgData();
-
-private:
-    // 深拷贝 TDF_MSG 关联数据（内部调用）
-    void copyMsgData(const TDF_MSG* src);
-    // 释放 TDF_MSG 关联数据（内部调用）
-    void freeMsgData();
+    void reset();
 };
 
-// 线程安全的消息队列（单例模式）
 class MsgQueue {
 public:
-    // 获取单例实例
     static MsgQueue& getInstance() {
         static MsgQueue instance;
         return instance;
     }
 
-    // 禁用拷贝/赋值
     MsgQueue(const MsgQueue&) = delete;
     MsgQueue& operator=(const MsgQueue&) = delete;
 
-    // 入队：接收原始 TDF_MSG 指针，内部完成深拷贝
     void push(THANDLE hTdf, const TDF_MSG* pMsgHead);
-
-    // 出队：阻塞直到有数据/队列停止（返回 false 表示队列停止）
     bool pop(TdfMsgData& data);
-
-    // 停止队列（唤醒所有阻塞的 pop 操作）
     void stop();
-
-    // 清空队列（释放所有未处理数据）
     void clear();
 
-    // 检查队列是否停止
+    // 设置白名单：push 时只入队白名单内股票的数据。
+    // 空列表 = 不过滤（全市场入队）。必须在行情连接前调用。
+    void setWhitelist(const std::vector<std::string>& codes);
+
     bool isStopped() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_isStopped;
+        return m_isStopped.load(std::memory_order_acquire);
     }
 
 private:
-    // 私有构造函数（单例）
-    MsgQueue() : m_isStopped(false) {}
+    MsgQueue();
 
-    std::queue<TdfMsgData> m_queue;          // 底层队列
-    mutable std::mutex m_mutex;              // 互斥锁（mutable 支持 const 方法加锁）
-    std::condition_variable m_cv;            // 条件变量
-    bool m_isStopped;                        // 停止标记
+    struct QueueStats {
+        std::atomic<uint64_t> dropped_market{0};
+        std::atomic<uint64_t> dropped_order{0};
+        std::atomic<uint64_t> dropped_transaction{0};
+        std::atomic<uint64_t> max_depth{0};
+        std::atomic<uint64_t> max_callback_enqueue_ns{0};
+        std::atomic<uint64_t> max_queue_delay_ns{0};
+    };
+
+    static int64_t steady_now_ns();
+    static void sanitize_payload_pointers(int dataType, void* payload, int payload_len);
+    static void update_max(std::atomic<uint64_t>& holder, uint64_t value);
+    void maybe_log_stats(int64_t now_ns);
+    bool has_data() const;
+    void add_drop_stat(int dataType, uint64_t dropped_count);
+    bool isWhitelisted(const char* szWindCode) const;
+
+private:
+    static const uint64_t kCapacity = 1ULL << 16;
+    static const uint64_t kMask = kCapacity - 1;
+
+    std::vector<TdfMsgData> m_ring;
+    std::atomic<uint64_t> m_read_index;
+    std::atomic<uint64_t> m_write_index;
+    std::atomic<bool> m_isStopped;
+    std::mutex m_wait_mutex;
+    std::condition_variable m_cv;
+    QueueStats m_stats;
+    std::atomic<int64_t> m_last_stats_log_ns;
+
+    // 白名单过滤（启动时设置后运行期只读，无需同步）
+    std::unordered_set<std::string> m_whitelist;
+    bool m_filterEnabled = false;
+    std::atomic<uint64_t> m_filtered_count{0};  // 被过滤掉的消息计数
 };
 
 #endif // MSG_QUEUE_H

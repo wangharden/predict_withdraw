@@ -58,7 +58,7 @@ void MarketDataProcessor::stopProcessThread()
 // 数据处理线程主函数
 void MarketDataProcessor::processMsgThreadFunc()
 {
-    TdfMsgData data(nullptr, nullptr);
+    TdfMsgData data;
     MsgQueue& msgQueue = MsgQueue::getInstance();
 
     std::cout << "Process thread started" << std::endl;
