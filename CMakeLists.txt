@@ -74,19 +74,12 @@ set(appName "limitUpHittingMarket")  # 最终生成的可执行文件名为 limi
 # 创建可执行文件
 add_executable(${appName} ${SOURCES} ${HEADERS})
 
-# 工具程序：用于测量 TDF 回调单条消息的最大 nDataLen（便于设计 ring buffer slot 容量）
-add_executable(tdf_slot_probe tools/tdf_slot_probe.cpp)
-
 # 链接库文件（根据不同操作系统）
 if(WIN32)
     # Windows系统库链接
     target_link_libraries(${appName} PRIVATE
         ${PROJECT_SOURCE_DIR}/lib/fixapi50.lib
         ${PROJECT_SOURCE_DIR}/lib/secitpdk.lib
-        ${PROJECT_SOURCE_DIR}/lib/TDFAPI30.lib
-    )
-
-    target_link_libraries(tdf_slot_probe PRIVATE
         ${PROJECT_SOURCE_DIR}/lib/TDFAPI30.lib
     )
 elseif(UNIX AND NOT APPLE)
@@ -97,9 +90,6 @@ elseif(UNIX AND NOT APPLE)
         ${PROJECT_SOURCE_DIR}/lib/libfixapitool.so
         ${PROJECT_SOURCE_DIR}/lib/libsecitpdk.so
         ${PROJECT_SOURCE_DIR}/lib/libzmq.so
-    )
-    target_link_libraries(tdf_slot_probe PRIVATE
-        ${PROJECT_SOURCE_DIR}/lib/libTDFAPI30.so
     )
     # 添加运行时库路径（等效于-rpath）
     set_target_properties(${appName} PROPERTIES
@@ -119,7 +109,6 @@ endif()
 # 链接线程库（保留此部分，解决pthread错误，添加PRIVATE保持语法一致）
 find_package(Threads REQUIRED)
 target_link_libraries(${appName} PRIVATE Threads::Threads)
-target_link_libraries(tdf_slot_probe PRIVATE Threads::Threads)
 
 # 安装配置（可选）
 install(TARGETS ${appName}

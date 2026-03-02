@@ -126,7 +126,7 @@ predict_withdraw/
 ├── account.ini              ← 账户配置（不入库）
 ├── itpdk.ini                ← ITPDK 配置（不入库）
 ├── white_list.txt           ← 白名单股票列表
-├── tools/                   ← 辅助工具（tdf_slot_probe）
+
 ├── include/                 ← 第三方头文件（TDF SDK, SECITPDK, spdlog, rapidjson, zmq）
 ├── lib/                     ← 第三方库文件
 ├── server_logs/             ← 运行日志（.gitignore）

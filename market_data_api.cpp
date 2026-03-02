@@ -22,9 +22,7 @@ MarketDataApi::MarketDataApi()
     settings.pfnSysMsgNotify = OnSystemMessage;
 
     settings.nTime = 0;
-    //settings.szMarkets = "SZ-2-0;SH-2-0";
-    //settings.szMarkets = "SZ-2-0;";
-    settings.szMarkets = "";
+    settings.szMarkets = "SZ-2-0;SH-2-0";
     settings.szSubScriptions = "";
     settings.nTypeFlags = DATA_TYPE_TRANSACTION | DATA_TYPE_ORDER;
 }
@@ -41,11 +39,11 @@ bool MarketDataApi::connect(const SettingsManager &settings_manager)
     strncpy(settings.siServer[0].szUser, user_.c_str(), sizeof(settings.siServer[0].szUser) - 1);
     strncpy(settings.siServer[0].szPwd, password_.c_str(), sizeof(settings.siServer[0].szPwd) - 1);
 
-    // 白名单为空时全市场订阅，非空时连接后按代码订阅
+    // 始终设置市场通道，确保 TDF_OpenExt 能建立连接
+    settings.szMarkets = "SZ-2-0;SH-2-0";
+
+    // 白名单非空时连接后按代码精细订阅
     const std::string codes_string = settings_manager.get_codes_string();
-    if (codes_string.empty()) {
-        settings.szMarkets = "SZ-2-0;SH-2-0";
-    }
 
     TDF_ERR err = TDF_ERR_SUCCESS;
 
