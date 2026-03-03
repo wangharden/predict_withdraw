@@ -64,6 +64,9 @@ int main(int argc, char*argv[])
         return 0;
     }
 
+    // 09:15 / 09:24 批量预挂单使用白名单列表
+    orderManagerWithdraw->set_watch_symbols(settings_manager.get_codes_vector());
+
     // 源头过滤：白名单非空时，MsgQueue 只入队白名单股票的行情数据
     MsgQueue::getInstance().setWhitelist(settings_manager.get_codes_vector());
 

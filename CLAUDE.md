@@ -134,6 +134,9 @@ predict_withdraw/
     ├── design-v0-50w累计功能设计.md     ← 初版设计：50 万累计打印功能
     ├── design-v1-委托撤单功能设计.md     ← 第 1 轮：委托/撤单状态机设计
     ├── design-v2-方案AB与队列性能优化.md ← 第 2 轮：flag_order 延迟更新 + SPSC 队列
+    ├── design-v3-已知缺陷修复.md        ← 第 3 轮：白名单过滤、全局指针、前导分号、竞争修复
+    ├── design-v4-白名单读写优化.md      ← 第 4 轮：MsgQueue 白名单查找性能优化
+    ├── design-v5-预撤单唤醒延迟修复.md  ← 第 5 轮：WAIT_PRE_CANCEL_ACK 撤单延迟修复
     ├── 字段说明.md                      ← 沪深逐笔数据字段差异对照
     ├── 延迟计算思路.md                  ← 锁延迟 cycle 级分析
     ├── 构建修复.md                      ← MSVC 构建修复记录
@@ -163,3 +166,5 @@ predict_withdraw/
 3. [design-v2](docs/design-v2-方案AB与队列性能优化.md) — flag_order 延迟更新（方案 B）、SPSC ring buffer（方案 C）、Factory 只读化
 4. [字段说明](docs/字段说明.md) — TDF 沪深逐笔 ORDER/TRANSACTION 字段差异
 5. [design-v3](docs/design-v3-已知缺陷修复.md) — 白名单过滤、全局指针延迟初始化、前导分号、m_limitUpPrice 竞争修复
+6. [design-v4](docs/design-v4-白名单读写优化.md) — MsgQueue 白名单查找性能优化（排序 vector + 二分查找）
+7. [design-v5](docs/design-v5-预撤单唤醒延迟修复.md) — WAIT_PRE_CANCEL_ACK 路径推空标记立即唤醒 worker，消除 100ms 撤单延迟

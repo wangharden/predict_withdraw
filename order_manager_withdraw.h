@@ -93,6 +93,10 @@ public:
     // 行情侧触发事件投递（线程安全）。忙时会被覆盖式抑制（不入队）。
     void post_limitup_trigger(LimitUpTrigger trigger);
 
+    // 设置策略关注的股票列表（通常来自白名单）。
+    // 用于 09:15 / 09:24 批量挂涨停价卖单。
+    void set_watch_symbols(std::vector<std::string> symbols);
+
     static OrderManagerWithdraw * get_order_manager_withdraw();
 
 private:
@@ -113,6 +117,7 @@ private:
             WAIT_NEW_ACK = 2,    // 已发送新单，等待委托确认回报
             WAIT_CANCEL_ACK = 3, // 已发送撤单，等待撤单确认回报
             STOPPED = 4,         // 封板后停止
+            WAIT_PRE_CANCEL_ACK = 5, // 9:30后首单前：先撤 09:24 预挂单，等待撤单回报
         };
 
         Phase phase = IDLE;
@@ -125,6 +130,22 @@ private:
         int64_t to_cancel_sys_id = 0;   // 待撤的上一笔sys_id
         int cancel_attempts = 0;
         int64_t last_cancel_send_ns = 0;
+
+        // 09:24 批量预挂单 sys_id（9:30后首单前必须撤掉）
+        int64_t pre0924_sys_id = 0;
+
+        // 预撤单闭环：撤完 09:24 后再执行一次“被覆盖保留”的触发
+        struct DeferredTrigger {
+            bool valid = false;
+            LimitUpTriggerType type = LimitUpTriggerType::SELL_SUM_50W;
+            int event_time = 0;
+            int64_t limitup_raw = 0;
+            int64_t base_raw = 0;
+            int64_t tick_raw = 0;
+            int64_t signal_steady_ns = 0;
+            int trigger_count_50w = 0;
+        };
+        DeferredTrigger deferred;
 
         // 当前闭环上下文（用于time_spend.log原始信息）
         std::string reason;
@@ -140,6 +161,7 @@ private:
     };
 
     static int64_t steady_now_ns();
+    static int current_hhmmss();
     static std::string normalize_symbol(const std::string& symbol);
     static bool split_symbol(const std::string& symbol, std::string& out_code, std::string& out_market);
     static void sanitize_csv_field(char* dst, size_t dst_len, const char* src);
@@ -150,8 +172,14 @@ private:
     void handle_limitup_trigger(const LimitUpTrigger& trigger);
     void handle_limitup_trade_msg(const char* pTime, const stStructMsg& stMsg, int nType);
     void handle_limitup_timeouts();
+    void handle_scheduled_batch_orders();
     bool send_limitup_sell_order(const std::string& symbol, LimitUpOrderState& st);
     bool send_cancel_order(const std::string& symbol, LimitUpOrderState& st, int64_t target_sys_id);
+    bool send_scheduled_limitup_sell(const std::string& symbol,
+                                     int64_t limitup_raw,
+                                     const char* tag,
+                                     int now_hhmmss,
+                                     int64_t& out_sys_id);
 
 private:
     // 线程同步相关
@@ -174,6 +202,37 @@ private:
 
     // 涨停卖单策略状态（worker线程串行访问）
     std::unordered_map<std::string, LimitUpOrderState> limitup_states_;
+
+    // 09:15 / 09:24 批量预挂单（仅worker线程执行；symbols由main一次性注入）
+    std::vector<std::string> watch_symbols_;
+    size_t batch_0915_index_ = 0;
+    size_t batch_0924_index_ = 0;
+    bool batch_0915_done_ = false;
+    bool batch_0924_done_ = false;
+
+    struct PerSecondLimiter {
+        int max_per_sec = 100;
+        int used = 0;
+        int64_t window_sec = -1; // steady_now_ns()/1e9
+
+        bool allow(int64_t now_ns)
+        {
+            const int64_t sec = now_ns / 1000000000LL;
+            if (sec != window_sec)
+            {
+                window_sec = sec;
+                used = 0;
+            }
+            if (used >= max_per_sec)
+            {
+                return false;
+            }
+            ++used;
+            return true;
+        }
+    };
+    PerSecondLimiter limiter_0915_;
+    PerSecondLimiter limiter_0924_;
 
     // 离线耗时原始信息输出文件（worker线程写）
     FILE* time_spend_fp_ = nullptr;

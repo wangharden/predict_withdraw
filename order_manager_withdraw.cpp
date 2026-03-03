@@ -2,8 +2,12 @@
 #include "spdlog_api.h"
 #include "utility_functions.h"
 #include "trade_return_monitor.h"
+#include "stock_data_manager_factory.h"
+#include "stock_data_manager.h"
 
 #include <chrono>
+#include <ctime>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -69,10 +73,54 @@ void OrderManagerWithdraw::set_trading_account_info(const std::string& khh,
     sz_gdh_ = sz_gdh;
 }
 
+void OrderManagerWithdraw::set_watch_symbols(std::vector<std::string> symbols)
+{
+    // 预处理：去空、去重（保持稳定顺序可预测）
+    symbols.erase(std::remove_if(symbols.begin(), symbols.end(),
+                                 [](const std::string& s) { return s.empty(); }),
+                  symbols.end());
+    std::sort(symbols.begin(), symbols.end());
+    symbols.erase(std::unique(symbols.begin(), symbols.end()), symbols.end());
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        watch_symbols_ = std::move(symbols);
+        batch_0915_index_ = 0;
+        batch_0924_index_ = 0;
+        batch_0915_done_ = false;
+        batch_0924_done_ = false;
+        limiter_0915_.max_per_sec = 150;
+        limiter_0915_.used = 0;
+        limiter_0915_.window_sec = -1;
+        limiter_0924_.max_per_sec = 100;
+        limiter_0924_.used = 0;
+        limiter_0924_.window_sec = -1;
+    }
+
+    if (s_spLogger)
+    {
+        s_spLogger->info("[SCHED] watch_symbols set: {}", watch_symbols_.size());
+        s_spLogger->flush();
+    }
+}
+
 int64_t OrderManagerWithdraw::steady_now_ns()
 {
     using namespace std::chrono;
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+int OrderManagerWithdraw::current_hhmmss()
+{
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+    std::tm local_tm;
+#ifdef _WIN32
+    localtime_s(&local_tm, &now_c);
+#else
+    localtime_r(&now_c, &local_tm);
+#endif
+    return local_tm.tm_hour * 10000 + local_tm.tm_min * 100 + local_tm.tm_sec;
 }
 
 std::string OrderManagerWithdraw::normalize_symbol(const std::string& symbol)
@@ -169,6 +217,7 @@ void OrderManagerWithdraw::post_limitup_trigger(LimitUpTrigger trigger)
     }
     trigger.symbol = normalize_symbol(trigger.symbol);
 
+    bool accepted = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         LimitUpOrderState& st = limitup_states_[trigger.symbol];
@@ -215,12 +264,38 @@ void OrderManagerWithdraw::post_limitup_trigger(LimitUpTrigger trigger)
             return;
         }
 
-        // 覆盖式：一旦接纳该触发，立即将状态置为busy，避免短时间内重复入队
-        st.phase = LimitUpOrderState::WAIT_SEND;
-        m_limitupTriggerQueue.push(std::move(trigger));
+        // 09:30后首单前：若存在 09:24 预挂单，则先撤单，撤单成功后再执行本触发
+        if (st.pre0924_sys_id > 0)
+        {
+            st.phase = LimitUpOrderState::WAIT_PRE_CANCEL_ACK;
+            st.to_cancel_sys_id = st.pre0924_sys_id;
+            st.cancel_attempts = 0;    // 首次撤单由 timeout 推进发送
+            st.last_cancel_send_ns = 0;
+            st.deferred.valid = true;
+            st.deferred.type = trigger.type;
+            st.deferred.event_time = trigger.event_time;
+            st.deferred.limitup_raw = trigger.limitup_raw;
+            st.deferred.base_raw = trigger.base_raw;
+            st.deferred.tick_raw = trigger.tick_raw;
+            st.deferred.signal_steady_ns = trigger.signal_steady_ns;
+            st.deferred.trigger_count_50w = trigger.trigger_count_50w;
+            // 推入空标记唤醒 worker，使其立即执行 handle_limitup_timeouts() 发送撤单
+            m_limitupTriggerQueue.push(LimitUpTrigger{});
+            accepted = true;
+        }
+        else
+        {
+            // 覆盖式：一旦接纳该触发，立即将状态置为busy，避免短时间内重复入队
+            st.phase = LimitUpOrderState::WAIT_SEND;
+            m_limitupTriggerQueue.push(std::move(trigger));
+            accepted = true;
+        }
     }
 
-    m_cv.notify_one();
+    if (accepted)
+    {
+        m_cv.notify_one();
+    }
 }
 
 int64 OrderManagerWithdraw::getRevocableOrderIds(const std::string& stockCode, std::vector<OrderWithdraw>& outIds)
@@ -353,6 +428,7 @@ void OrderManagerWithdraw::workerThread()
         }
 
         handle_limitup_timeouts();
+        handle_scheduled_batch_orders();
     }
 }
 
@@ -606,6 +682,74 @@ bool OrderManagerWithdraw::send_cancel_order(const std::string& symbol, LimitUpO
     return true;
 }
 
+bool OrderManagerWithdraw::send_scheduled_limitup_sell(const std::string& symbol,
+                                                       int64_t limitup_raw,
+                                                       const char* tag,
+                                                       int now_hhmmss,
+                                                       int64_t& out_sys_id)
+{
+    out_sys_id = 0;
+    std::string code;
+    std::string market;
+    if (!split_symbol(symbol, code, market))
+    {
+        return false;
+    }
+    if (khh_.empty())
+    {
+        return false;
+    }
+    const std::string& gdh = (market == "SH") ? sh_gdh_ : sz_gdh_;
+    if (gdh.empty())
+    {
+        return false;
+    }
+    if (limitup_raw <= 0)
+    {
+        return false;
+    }
+
+    const double price = static_cast<double>(limitup_raw) / 10000.0;
+    const int64_t qty = 100;
+    const int64_t sys_id = SECITPDK_OrderEntrust(khh_.c_str(),
+                                                 market.c_str(),
+                                                 code.c_str(),
+                                                 JYLB_SALE,
+                                                 qty,
+                                                 price,
+                                                 0 /* limit */,
+                                                 gdh.c_str());
+    if (sys_id <= 0)
+    {
+        std::string err = SECITPDK_GetLastError();
+        if (s_spLogger)
+        {
+            s_spLogger->error("[{}][SEND_FAIL] code={} now={} ret={} err={}",
+                              tag ? tag : "SCHED",
+                              symbol,
+                              now_hhmmss,
+                              static_cast<long long>(sys_id),
+                              gbk_to_utf8(err).c_str());
+            s_spLogger->flush();
+        }
+        return false;
+    }
+
+    out_sys_id = sys_id;
+    if (s_spLogger)
+    {
+        s_spLogger->info("[{}][SEND_OK] code={} now={} sys_id={} price={} qty={}",
+                         tag ? tag : "SCHED",
+                         symbol,
+                         now_hhmmss,
+                         static_cast<long long>(sys_id),
+                         price,
+                         static_cast<long long>(qty));
+        s_spLogger->flush();
+    }
+    return true;
+}
+
 void OrderManagerWithdraw::handle_limitup_timeouts()
 {
     struct RetryTask {
@@ -625,7 +769,9 @@ void OrderManagerWithdraw::handle_limitup_timeouts()
             const std::string& symbol = kv.first;
             LimitUpOrderState& st = kv.second;
 
-            if (st.phase != LimitUpOrderState::WAIT_CANCEL_ACK || st.to_cancel_sys_id <= 0)
+            if ((st.phase != LimitUpOrderState::WAIT_CANCEL_ACK &&
+                 st.phase != LimitUpOrderState::WAIT_PRE_CANCEL_ACK) ||
+                st.to_cancel_sys_id <= 0)
             {
                 continue;
             }
@@ -658,6 +804,158 @@ void OrderManagerWithdraw::handle_limitup_timeouts()
         tmp.seq = retry_tasks[i].seq;
         tmp.cancel_attempts = retry_tasks[i].attempt;
         send_cancel_order(retry_tasks[i].symbol, tmp, retry_tasks[i].target_sys_id);
+    }
+}
+
+void OrderManagerWithdraw::handle_scheduled_batch_orders()
+{
+    // 时间窗口：
+    // - 09:10:20~09:15:00：对名单全部挂一笔 100 股涨停价卖单（节流）
+    // - 09:24:00~09:25:00：对名单全部再挂一笔 100 股涨停价卖单（记录sys_id，供9:30后撤单）
+    const int now = current_hhmmss();
+    const bool in_0915_window = (now >= 91020 && now < 91500);
+    const bool in_0924_window = (now >= 92400 && now < 92500);
+
+    // 过窗后不再执行（避免盘中误触发）
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!batch_0915_done_ && now >= 91500)
+        {
+            batch_0915_done_ = true;
+            if (s_spLogger && batch_0915_index_ < watch_symbols_.size())
+            {
+                s_spLogger->warn("[SCHED0915][INCOMPLETE] sent={} total={} now={}",
+                                 static_cast<unsigned long long>(batch_0915_index_),
+                                 static_cast<unsigned long long>(watch_symbols_.size()),
+                                 now);
+                s_spLogger->flush();
+            }
+        }
+        if (!batch_0924_done_ && now >= 92500)
+        {
+            batch_0924_done_ = true;
+            if (s_spLogger && batch_0924_index_ < watch_symbols_.size())
+            {
+                s_spLogger->warn("[SCHED0924][INCOMPLETE] sent={} total={} now={}",
+                                 static_cast<unsigned long long>(batch_0924_index_),
+                                 static_cast<unsigned long long>(watch_symbols_.size()),
+                                 now);
+                s_spLogger->flush();
+            }
+        }
+    }
+
+    if (!in_0915_window && !in_0924_window)
+    {
+        return;
+    }
+
+    // 每次迭代最多发送 N 笔，避免长时间占用worker线程
+    const int kMaxSendPerIter = 50;
+
+    if (in_0915_window)
+    {
+        for (int i = 0; i < kMaxSendPerIter; ++i)
+        {
+            const int64_t now_ns = steady_now_ns();
+            if (!limiter_0915_.allow(now_ns))
+            {
+                break;
+            }
+
+            std::string symbol;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (batch_0915_done_ || watch_symbols_.empty())
+                {
+                    break;
+                }
+                if (batch_0915_index_ >= watch_symbols_.size())
+                {
+                    batch_0915_done_ = true;
+                    if (s_spLogger)
+                    {
+                        s_spLogger->info("[SCHED0915][DONE] total={} now={}",
+                                         static_cast<unsigned long long>(watch_symbols_.size()),
+                                         now);
+                        s_spLogger->flush();
+                    }
+                    break;
+                }
+                symbol = watch_symbols_[batch_0915_index_++];
+            }
+
+            StockDataManager* mgr = StockDataManagerFactory::getInstance().getStockManager(symbol);
+            const double limitup = mgr ? mgr->getLimitUpPrice() : 0.0;
+            const int64_t limitup_raw = (limitup > 0.0) ? static_cast<int64_t>(std::llround(limitup * 10000.0)) : 0;
+            if (limitup_raw <= 0)
+            {
+                if (s_spLogger)
+                {
+                    s_spLogger->warn("[SCHED0915][SKIP_NO_LIMITUP] code={} now={}", symbol, now);
+                    s_spLogger->flush();
+                }
+                continue;
+            }
+
+            int64_t sys_id = 0;
+            (void)send_scheduled_limitup_sell(symbol, limitup_raw, "SCHED0915", now, sys_id);
+        }
+    }
+
+    if (in_0924_window)
+    {
+        for (int i = 0; i < kMaxSendPerIter; ++i)
+        {
+            const int64_t now_ns = steady_now_ns();
+            if (!limiter_0924_.allow(now_ns))
+            {
+                break;
+            }
+
+            std::string symbol;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (batch_0924_done_ || watch_symbols_.empty())
+                {
+                    break;
+                }
+                if (batch_0924_index_ >= watch_symbols_.size())
+                {
+                    batch_0924_done_ = true;
+                    if (s_spLogger)
+                    {
+                        s_spLogger->info("[SCHED0924][DONE] total={} now={}",
+                                         static_cast<unsigned long long>(watch_symbols_.size()),
+                                         now);
+                        s_spLogger->flush();
+                    }
+                    break;
+                }
+                symbol = watch_symbols_[batch_0924_index_++];
+            }
+
+            StockDataManager* mgr = StockDataManagerFactory::getInstance().getStockManager(symbol);
+            const double limitup = mgr ? mgr->getLimitUpPrice() : 0.0;
+            const int64_t limitup_raw = (limitup > 0.0) ? static_cast<int64_t>(std::llround(limitup * 10000.0)) : 0;
+            if (limitup_raw <= 0)
+            {
+                if (s_spLogger)
+                {
+                    s_spLogger->warn("[SCHED0924][SKIP_NO_LIMITUP] code={} now={}", symbol, now);
+                    s_spLogger->flush();
+                }
+                continue;
+            }
+
+            int64_t sys_id = 0;
+            if (send_scheduled_limitup_sell(symbol, limitup_raw, "SCHED0924", now, sys_id))
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                LimitUpOrderState& st = limitup_states_[symbol];
+                st.pre0924_sys_id = sys_id;
+            }
+        }
     }
 }
 
@@ -765,6 +1063,9 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
         uint32_t seq = 0;
         int64_t target = 0;
         int64_t active = 0;
+        bool precancel_filled = false;
+        bool enqueue_deferred = false;
+        LimitUpTrigger deferred_trigger;
         std::string reason;
         int trigger_nTime = 0;
         int64_t signal_ns = 0;
@@ -785,7 +1086,9 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
                 return;
             }
             LimitUpOrderState& st = it->second;
-            if (st.phase != LimitUpOrderState::WAIT_CANCEL_ACK || st.to_cancel_sys_id <= 0)
+            if ((st.phase != LimitUpOrderState::WAIT_CANCEL_ACK &&
+                 st.phase != LimitUpOrderState::WAIT_PRE_CANCEL_ACK) ||
+                st.to_cancel_sys_id <= 0)
             {
                 return;
             }
@@ -798,24 +1101,80 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
                 return;
             }
 
-            seq = st.seq;
-            target = st.to_cancel_sys_id;
-            active = st.active_sys_id;
-            reason = st.reason;
-            trigger_nTime = st.trigger_nTime;
-            signal_ns = st.signal_steady_ns;
-            worker_dequeue_ns = st.worker_dequeue_ns;
-            send_ns = st.send_steady_ns;
-            new_ack_ns = st.new_ack_ns;
-            cancel_send_ns = st.last_cancel_send_ns;
+            if (st.phase == LimitUpOrderState::WAIT_PRE_CANCEL_ACK)
+            {
+                // 09:24预挂单在撤单前已全部成交：视为“无需再撤”，直接继续执行被覆盖保留的触发
+                precancel_filled = true;
+                target = st.to_cancel_sys_id;
 
-            st.pending_sys_id = 0;
-            st.to_cancel_sys_id = 0;
-            st.active_sys_id = 0;
-            st.cancel_attempts = 0;
-            st.last_cancel_send_ns = 0;
-            st.stop_after_done = true;
-            st.phase = LimitUpOrderState::STOPPED;
+                st.pre0924_sys_id = 0;
+                st.to_cancel_sys_id = 0;
+                st.cancel_attempts = 0;
+                st.last_cancel_send_ns = 0;
+
+                if (st.deferred.valid)
+                {
+                    deferred_trigger.type = st.deferred.type;
+                    deferred_trigger.symbol = symbol;
+                    deferred_trigger.event_time = st.deferred.event_time;
+                    deferred_trigger.limitup_raw = st.deferred.limitup_raw;
+                    deferred_trigger.base_raw = st.deferred.base_raw;
+                    deferred_trigger.tick_raw = st.deferred.tick_raw;
+                    deferred_trigger.signal_steady_ns = st.deferred.signal_steady_ns;
+                    deferred_trigger.trigger_count_50w = st.deferred.trigger_count_50w;
+                    st.deferred.valid = false;
+
+                    st.phase = LimitUpOrderState::WAIT_SEND;
+                    m_limitupTriggerQueue.push(deferred_trigger);
+                    enqueue_deferred = true;
+                }
+                else
+                {
+                    st.phase = st.stop_after_done ? LimitUpOrderState::STOPPED : LimitUpOrderState::IDLE;
+                }
+                seq = st.seq;
+            }
+            else
+            {
+                seq = st.seq;
+                target = st.to_cancel_sys_id;
+                active = st.active_sys_id;
+                reason = st.reason;
+                trigger_nTime = st.trigger_nTime;
+                signal_ns = st.signal_steady_ns;
+                worker_dequeue_ns = st.worker_dequeue_ns;
+                send_ns = st.send_steady_ns;
+                new_ack_ns = st.new_ack_ns;
+                cancel_send_ns = st.last_cancel_send_ns;
+
+                st.pending_sys_id = 0;
+                st.to_cancel_sys_id = 0;
+                st.active_sys_id = 0;
+                st.cancel_attempts = 0;
+                st.last_cancel_send_ns = 0;
+                st.stop_after_done = true;
+                st.phase = LimitUpOrderState::STOPPED;
+            }
+        }
+
+        if (precancel_filled)
+        {
+            if (s_spLogger)
+            {
+                s_spLogger->warn("[PRE0924_FILLED_BEFORE_CANCEL] code={} sys_id={} order_qty={} total_match_qty={} confirm_time={} pTime={}",
+                                 symbol,
+                                 static_cast<long long>(target),
+                                 static_cast<long long>(order_qty),
+                                 static_cast<long long>(total_match_qty),
+                                 confirm_s,
+                                 pTime_s);
+                s_spLogger->flush();
+            }
+            if (enqueue_deferred)
+            {
+                m_cv.notify_one();
+            }
+            return;
         }
 
         if (s_spLogger)
@@ -871,6 +1230,9 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
     {
         uint32_t seq = 0;
         int64_t target = 0;
+        bool is_precancel = false;
+        bool enqueue_deferred = false;
+        LimitUpTrigger deferred_trigger;
         std::string reason;
         int trigger_nTime = 0;
         int64_t signal_ns = 0;
@@ -889,7 +1251,9 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
                 return;
             }
             LimitUpOrderState& st = it->second;
-            if (st.phase != LimitUpOrderState::WAIT_CANCEL_ACK || st.to_cancel_sys_id <= 0)
+            if ((st.phase != LimitUpOrderState::WAIT_CANCEL_ACK &&
+                 st.phase != LimitUpOrderState::WAIT_PRE_CANCEL_ACK) ||
+                st.to_cancel_sys_id <= 0)
             {
                 return;
             }
@@ -897,31 +1261,90 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
             {
                 return;
             }
-            seq = st.seq;
-            target = st.to_cancel_sys_id;
-            reason = st.reason;
-            trigger_nTime = st.trigger_nTime;
-            signal_ns = st.signal_steady_ns;
-            worker_dequeue_ns = st.worker_dequeue_ns;
-            send_ns = st.send_steady_ns;
-            new_ack_ns = st.new_ack_ns;
-            cancel_send_ns = st.last_cancel_send_ns;
 
-            st.to_cancel_sys_id = 0;
-            st.cancel_attempts = 0;
-            st.last_cancel_send_ns = 0;
-            st.phase = st.stop_after_done ? LimitUpOrderState::STOPPED : LimitUpOrderState::IDLE;
+            if (st.phase == LimitUpOrderState::WAIT_PRE_CANCEL_ACK)
+            {
+                is_precancel = true;
+                target = st.to_cancel_sys_id;
+
+                // 清理09:24预挂单，并恢复到可发新单状态
+                st.pre0924_sys_id = 0;
+                st.to_cancel_sys_id = 0;
+                st.cancel_attempts = 0;
+                st.last_cancel_send_ns = 0;
+
+                if (st.deferred.valid)
+                {
+                    deferred_trigger.type = st.deferred.type;
+                    deferred_trigger.symbol = symbol;
+                    deferred_trigger.event_time = st.deferred.event_time;
+                    deferred_trigger.limitup_raw = st.deferred.limitup_raw;
+                    deferred_trigger.base_raw = st.deferred.base_raw;
+                    deferred_trigger.tick_raw = st.deferred.tick_raw;
+                    deferred_trigger.signal_steady_ns = st.deferred.signal_steady_ns;
+                    deferred_trigger.trigger_count_50w = st.deferred.trigger_count_50w;
+                    st.deferred.valid = false;
+
+                    st.phase = LimitUpOrderState::WAIT_SEND;
+                    m_limitupTriggerQueue.push(deferred_trigger);
+                    enqueue_deferred = true;
+                }
+                else
+                {
+                    st.phase = st.stop_after_done ? LimitUpOrderState::STOPPED : LimitUpOrderState::IDLE;
+                }
+                // 预撤单不输出 time_spend 的 CYCLE_DONE（它不属于一次“触发->新单->撤上一单”闭环）
+                seq = st.seq;
+                cancel_send_ns = st.last_cancel_send_ns;
+            }
+            else
+            {
+                seq = st.seq;
+                target = st.to_cancel_sys_id;
+                reason = st.reason;
+                trigger_nTime = st.trigger_nTime;
+                signal_ns = st.signal_steady_ns;
+                worker_dequeue_ns = st.worker_dequeue_ns;
+                send_ns = st.send_steady_ns;
+                new_ack_ns = st.new_ack_ns;
+                cancel_send_ns = st.last_cancel_send_ns;
+
+                st.to_cancel_sys_id = 0;
+                st.cancel_attempts = 0;
+                st.last_cancel_send_ns = 0;
+                st.phase = st.stop_after_done ? LimitUpOrderState::STOPPED : LimitUpOrderState::IDLE;
+            }
         }
 
         if (s_spLogger)
         {
-            s_spLogger->info("[LUP_CANCEL_ACK] code={} seq={} target_sys_id={} confirm_time={} pTime={}",
-                             symbol,
-                             seq,
-                             static_cast<long long>(target),
-                             confirm_s,
-                             pTime_s);
+            if (is_precancel)
+            {
+                s_spLogger->info("[PRE0924_CANCEL_ACK] code={} target_sys_id={} confirm_time={} pTime={}",
+                                 symbol,
+                                 static_cast<long long>(target),
+                                 confirm_s,
+                                 pTime_s);
+            }
+            else
+            {
+                s_spLogger->info("[LUP_CANCEL_ACK] code={} seq={} target_sys_id={} confirm_time={} pTime={}",
+                                 symbol,
+                                 seq,
+                                 static_cast<long long>(target),
+                                 confirm_s,
+                                 pTime_s);
+            }
             s_spLogger->flush();
+        }
+
+        if (is_precancel)
+        {
+            if (enqueue_deferred)
+            {
+                m_cv.notify_one();
+            }
+            return;
         }
 
         char line[512];
@@ -1014,7 +1437,9 @@ void OrderManagerWithdraw::handle_limitup_trade_msg(const char* pTime, const stS
                 return;
             }
 
-            if (st.phase == LimitUpOrderState::WAIT_CANCEL_ACK && target > 0 && (oid == target || cx_oid == target))
+            if ((st.phase == LimitUpOrderState::WAIT_CANCEL_ACK ||
+                 st.phase == LimitUpOrderState::WAIT_PRE_CANCEL_ACK) &&
+                target > 0 && (oid == target || cx_oid == target))
             {
                 st.cancel_attempts++;
                 attempt = st.cancel_attempts;
