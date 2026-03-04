@@ -137,6 +137,7 @@ predict_withdraw/
     ├── design-v3-已知缺陷修复.md        ← 第 3 轮：白名单过滤、全局指针、前导分号、竞争修复
     ├── design-v4-白名单读写优化.md      ← 第 4 轮：MsgQueue 白名单查找性能优化
     ├── design-v5-预撤单唤醒延迟修复.md  ← 第 5 轮：WAIT_PRE_CANCEL_ACK 撤单延迟修复
+    ├── design-v6-触发规则调整与跟单时间门控.md  ← 第 6 轮：09:30 后首次触发规则调整 + 跟单 5ms 门控
     ├── 字段说明.md                      ← 沪深逐笔数据字段差异对照
     ├── 延迟计算思路.md                  ← 锁延迟 cycle 级分析
     ├── 构建修复.md                      ← MSVC 构建修复记录
@@ -168,3 +169,4 @@ predict_withdraw/
 5. [design-v3](docs/design-v3-已知缺陷修复.md) — 白名单过滤、全局指针延迟初始化、前导分号、m_limitUpPrice 竞争修复
 6. [design-v4](docs/design-v4-白名单读写优化.md) — MsgQueue 白名单查找性能优化（排序 vector + 二分查找）
 7. [design-v5](docs/design-v5-预撤单唤醒延迟修复.md) — WAIT_PRE_CANCEL_ACK 路径推空标记立即唤醒 worker，消除 100ms 撤单延迟
+8. [design-v6](docs/design-v6-触发规则调整与跟单时间门控.md) — 09:30 后首次触发规则调整（删除首次 50 万触发）+ trade_return_monitor 跟单 5ms 门控

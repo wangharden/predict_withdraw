@@ -13,6 +13,7 @@
 #include "utility_functions.h"
 
 namespace {
+constexpr int64_t kFollowupMaxDeltaMs = 5;
 
 template <size_t N>
 std::string safe_cstr(const char (&buf)[N]) {
@@ -50,6 +51,7 @@ TradeReturnMonitor::TradeReturnMonitor(const SettingsManager& settings_manager) 
     recorded_order_ids_.reserve(watch_codes_.empty() ? 1024u : watch_codes_.size());
     printed_keys_.reserve(4096);
     followup_sent_stocks_.reserve(watch_codes_.empty() ? 1024u : watch_codes_.size());
+    last_sale_local_ms_by_stock_.reserve(watch_codes_.empty() ? 1024u : watch_codes_.size());
 }
 
 TradeReturnMonitor::~TradeReturnMonitor() {
@@ -116,14 +118,17 @@ void TradeReturnMonitor::on_match(const stStructMsg& msg) {
     }
 
     std::string local_time = local_time_string(now);
+    const int64_t local_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
     RecordedOrder recorded_copy;
     bool has_recorded = false;
     const char* reason = nullptr;
 
     bool should_send_followup = false;
+    bool skip_followup_by_time_gate = false;
     std::string followup_stock_key;
     double followup_price = 0.0;
+    int64_t followup_delta_ms = -1;
 
     uint64_t key = make_dedup_key(msg);
     {
@@ -155,20 +160,39 @@ void TradeReturnMonitor::on_match(const stStructMsg& msg) {
                 reason = "same_price_second_sale";
 
                 if (followup_sent_stocks_.find(stock_key) == followup_sent_stocks_.end()) {
-                    followup_sent_stocks_.insert(stock_key);
-                    should_send_followup = true;
                     followup_stock_key = stock_key;
                     followup_price = recorded.order_price;
+
+                    auto it_last = last_sale_local_ms_by_stock_.find(stock_key);
+                    if (it_last != last_sale_local_ms_by_stock_.end() && local_ms >= it_last->second) {
+                        followup_delta_ms = local_ms - it_last->second;
+                    }
+
+                    if (followup_delta_ms >= 0 && followup_delta_ms <= kFollowupMaxDeltaMs) {
+                        followup_sent_stocks_.insert(stock_key);
+                        should_send_followup = true;
+                    } else {
+                        skip_followup_by_time_gate = true;
+                    }
                 }
             } else {
                 return;
             }
         }
 
+        last_sale_local_ms_by_stock_[stock_key] = local_ms;
         printed_keys_.insert(key);
     }
 
     log_match(msg, reason, has_recorded ? &recorded_copy : nullptr, local_time);
+    if (skip_followup_by_time_gate) {
+        s_spLogger->info("[FOLLOWUP] skip order: local_time_gate. stock={} price={} delta_ms={} max_ms={}",
+                         followup_stock_key,
+                         followup_price,
+                         static_cast<long long>(followup_delta_ms),
+                         static_cast<long long>(kFollowupMaxDeltaMs));
+        s_spLogger->flush();
+    }
 
     if (should_send_followup) {
         if (khh_.empty()) {

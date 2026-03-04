@@ -4,15 +4,20 @@ project(limitUpHittingMarket)
 # 设置C++标准
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-# 统一使用 UTF-8 源文件编码（修复 MSVC 下中文字符串误解析）
+# 统一编译告警策略（按编译器区分）
 if(MSVC)
-    add_compile_options(/utf-8)
+    # 保持 MSVC 默认告警级别，不再注入 -w，避免 D9025“/W3 被 /w 覆盖”
+    add_compile_options(/utf-8 /W3 /wd4828)
+    # 旧版 spdlog/fmt 在 MSVC 下会触发 checked_array_iterator 弃用告警，先按官方建议静默
+    add_compile_definitions(
+        _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING
+        _CRT_SECURE_NO_WARNINGS
+    )
+else()
+    # GCC/Clang 维持项目现状：关闭告警
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 endif()
-# 核心：禁用所有警告（适用于 GCC、Clang）
-# 对 C 语言代码禁用警告
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
-# 对 C++ 语言代码禁用警告
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 
 # 不使用Qt库（与CONFIG -= qt对应）
 set(USE_QT OFF)

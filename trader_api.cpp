@@ -336,7 +336,7 @@ void TraderApi::revoke(std::string const & symbol, const SettingsManager &settin
                 }
                 
                 s_spLogger->info("当前线程id为: {},before withdraw",thread_id());
-                int nRet = SECITPDK_OrderWithdrawEx(st_, order.Market.c_str(), order.OrderId);
+                int64 nRet = SECITPDK_OrderWithdrawEx(st_, order.Market.c_str(), order.OrderId);
                 s_spLogger->info("当前线程id为: {},after withdraw, order.OrderId:{}",thread_id(),order.OrderId);
 
                 if (nRet > 0)

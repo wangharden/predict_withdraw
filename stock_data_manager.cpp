@@ -165,15 +165,6 @@ void StockDataManager::processOrder(const TDF_ORDER& order)
         return;
     }
 
-    // 初始化flag：09:30后首笔涨停价卖委托（不包含撤单）
-    if (!m_flagOrderInitialized && !isShCancel)
-    {
-        m_flagOrder = orderId;
-        m_flagOrderInitialized = true;
-        m_sumAmountRaw = 0;
-        return;
-    }
-
     if (!m_flagOrderInitialized)
     {
         return;
@@ -316,12 +307,40 @@ void StockDataManager::processTransaction(const TDF_TRANSACTION& trans)
     }
 
     // 1.07 触发：逐笔成交价 > base * 1.07（仅一次；封板后停止）
+    // 新规则：价格触发同时完成 flag_order 初始化；初始化前不允许 50w 累计触发。
     if (!isSzCancel && !m_isLimitUp && !m_price107Triggered && m_basePriceReady && m_basePriceRaw > 0)
     {
         const int64_t tickRaw = static_cast<int64_t>(trans.nPrice);
         if (tickRaw > 0 && tickRaw * 100 > m_basePriceRaw * 107)
         {
+            const OrderIdType askOrder = (trans.nAskOrder > 0) ? static_cast<OrderIdType>(trans.nAskOrder) : 0;
             m_price107Triggered = true;
+            m_flagOrder = askOrder;
+            m_flagOrderInitialized = true;
+            m_sumAmountRaw = 0;
+            m_pendingFlagOrderUpdate = false;
+            m_pendingEventTime = 0;
+            m_pendingLimitupRaw = 0;
+            m_pendingSeq = 0;
+
+            if (s_spLogger)
+            {
+                s_spLogger->info("[LIMITUP_PRICE107_INIT] code={} time={} ask_order={} flag_order={} sum_reset=1",
+                                 m_stockCode,
+                                 trans.nTime,
+                                 static_cast<unsigned long long>(askOrder),
+                                 static_cast<unsigned long long>(m_flagOrder));
+            }
+            else
+            {
+                std::cout << "[LIMITUP_PRICE107_INIT] code=" << m_stockCode
+                          << " time=" << trans.nTime
+                          << " ask_order=" << askOrder
+                          << " flag_order=" << m_flagOrder
+                          << " sum_reset=1"
+                          << std::endl;
+            }
+
             if (orderManagerWithdraw)
             {
                 LimitUpTrigger trig;
@@ -425,7 +444,7 @@ double StockDataManager::calcRemainingVol(TimeStamp currentTime)
     {
         return 0.0; // 无剩余挂单
     }
-    return remainingVolume ;
+    return static_cast<double>(remainingVolume);
 }
 
 double StockDataManager::calcSpeed(TimeStamp currentTime)
@@ -457,7 +476,7 @@ double StockDataManager::calcLastingTime(TimeStamp currentTime)
         return -1.0; // 未封板
     }
 
-    return time_to_no(currentTime) - time_to_no(m_T1);
+    return static_cast<double>(time_to_no(currentTime) - time_to_no(m_T1));
 }
 
 double StockDataManager::calcRemainingTime(TimeStamp currentTime)

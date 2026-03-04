@@ -65,6 +65,7 @@ private:
     std::unordered_map<std::string, RecordedOrder> recorded_by_stock_;
     std::unordered_set<int64_t> recorded_order_ids_;
     std::unordered_set<uint64_t> printed_keys_;
+    std::unordered_map<std::string, int64_t> last_sale_local_ms_by_stock_;
 };
 
 #endif // TRADE_RETURN_MONITOR_H
