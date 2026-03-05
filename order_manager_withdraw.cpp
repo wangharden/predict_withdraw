@@ -810,21 +810,24 @@ void OrderManagerWithdraw::handle_limitup_timeouts()
 void OrderManagerWithdraw::handle_scheduled_batch_orders()
 {
     // 时间窗口：
-    // - 09:10:20~09:15:00：对名单全部挂一笔 100 股涨停价卖单（节流）
-    // - 09:24:00~09:25:00：对名单全部再挂一笔 100 股涨停价卖单（记录sys_id，供9:30后撤单）
+    // - 09:15:00 前：不执行
+    // - 09:15:00：留1秒缓冲，不发送
+    // - 09:15:01~09:24:00：对名单全部挂一笔 100 股涨停价卖单(每秒下单数量<150)
+    // - 09:24:00~09:25:00：对名单全部再挂一笔 100 股涨停价卖单（每秒下单数量<100，记录sys_id，供9:30后撤单）
     const int now = current_hhmmss();
-    const bool in_0915_window = (now >= 91020 && now < 91500);
+    const bool in_0915_window = (now >= 91501 && now < 92400);
     const bool in_0924_window = (now >= 92400 && now < 92500);
 
-    // 过窗后不再执行（避免盘中误触发）
+    // 截止窗口处理（避免盘中误触发）
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (!batch_0915_done_ && now >= 91500)
+        // 09:24 起停止 SCHED0915 补发，切入 SCHED0924 窗口
+        if (!batch_0915_done_ && now >= 92400)
         {
             batch_0915_done_ = true;
             if (s_spLogger && batch_0915_index_ < watch_symbols_.size())
             {
-                s_spLogger->warn("[SCHED0915][INCOMPLETE] sent={} total={} now={}",
+                s_spLogger->warn("[SCHED0915][INCOMPLETE_CUTOFF_0924] sent={} total={} now={}",
                                  static_cast<unsigned long long>(batch_0915_index_),
                                  static_cast<unsigned long long>(watch_symbols_.size()),
                                  now);
